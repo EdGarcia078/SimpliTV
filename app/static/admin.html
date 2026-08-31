@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Panel de Administración — SimpliTV</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="admin-body">
+  <div class="admin-layout">
+    <!-- Top Navbar -->
+    <header class="admin-header">
+      <div class="admin-brand">
+        <div class="channel-badge">
+          <span class="live-dot"></span>
+          <span class="channel-name">SIMPLITV</span>
+        </div>
+        <span class="admin-title">Panel de Administración</span>
+      </div>
+
+      <div class="admin-user-nav">
+        <a href="/" class="btn-secondary" title="Ver la emisión en directo">📺 Ver TV</a>
+        <span id="current-username" class="user-badge">Admin</span>
+        <button id="btn-admin-logout" class="btn-outline" type="button">Cerrar Sesión</button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="admin-nav-tabs" aria-label="Secciones del panel administrativo">
+      <button class="nav-tab active" type="button" data-tab="tab-dashboard">Dashboard & Emisión</button>
+      <button class="nav-tab" type="button" data-tab="tab-channels">Gestión de Canales</button>
+      <button class="nav-tab" type="button" data-tab="tab-users">Gestión de Usuarios</button>
+      <button class="nav-tab" type="button" data-tab="tab-groups">Grupos de Acceso</button>
+      <button class="nav-tab" type="button" data-tab="tab-library">Biblioteca Multimedia</button>
+    </nav>
+
+    <!-- Main Content Container -->
+    <main class="admin-main">
+      <!-- 1. TAB: DASHBOARD & BROADCAST -->
+      <section id="tab-dashboard" class="tab-content active">
+        <div class="dashboard-grid">
+          <!-- Live Channel Card -->
+          <div class="admin-card card-broadcast">
+            <div class="card-header">
+              <h3>📡 Emisión Global del Canal</h3>
+
+              <select
+                id="admin-dash-channel"
+                class="channel-selector"
+                style="margin-right:auto; margin-left:1rem;"
+                aria-label="Seleccionar canal para consultar la emisión"
+                disabled
+              >
+                <option value="">Cargando canales...</option>
+              </select>
+
+              <button id="btn-skip-episode" class="btn-accent btn-sm" type="button" disabled>
+                ⏭ Saltar Episodio
+              </button>
+            </div>
+
+            <div class="broadcast-details">
+              <div class="detail-row">
+                <span class="label">Contenido Actual:</span>
+                <span id="dash-media" class="val font-bold">Cargando...</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Detalle:</span>
+                <span id="dash-episode" class="val">—</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Progreso de Emisión:</span>
+                <span id="dash-progress" class="val font-mono">00:00 / 00:00</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Siguiente Programado:</span>
+                <span id="dash-next" class="val text-muted">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Metrics -->
+          <div class="admin-card">
+            <h3>📊 Resumen de Biblioteca</h3>
+            <div class="stats-row">
+              <div class="stat-box">
+                <span id="stat-total-episodes" class="stat-num">0</span>
+                <span class="stat-lbl">Contenidos</span>
+              </div>
+              <div class="stat-box">
+                <span id="stat-unique-series" class="stat-num">0</span>
+                <span class="stat-lbl">Series</span>
+              </div>
+              <div class="stat-box">
+                <span id="stat-total-hours" class="stat-num">0h</span>
+                <span class="stat-lbl">Horas de Contenido</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <h3>👥 Usuarios</h3>
+            <div class="stats-row">
+              <div class="stat-box">
+                <span id="stat-total-users" class="stat-num">0</span>
+                <span class="stat-lbl">Total Registrados</span>
+              </div>
+              <div class="stat-box">
+                <span id="stat-active-users" class="stat-num">0</span>
+                <span class="stat-lbl">Usuarios Activos</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 1.5 TAB: CHANNELS -->
+      <section id="tab-channels" class="tab-content">
+        <div class="section-toolbar">
+          <div>
+            <h2>Gestión de Canales</h2>
+            <p class="text-muted" style="margin-top:.35rem;">
+              Toda la programación se administra desde aquí. Los cambios se guardan en la configuración portable del canal, sus series y sus franquicias para que al exportarlos conserven exactamente el mismo comportamiento.
+            </p>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre del Canal</th>
+                <th>Carpeta</th>
+                <th>Configuración</th>
+                <th>Horario</th>
+                <th>Gestión</th>
+              </tr>
+            </thead>
+            <tbody id="channels-tbody">
+              <tr>
+                <td colspan="6" style="text-align:center;">Cargando canales...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 2. TAB: USERS -->
+      <section id="tab-users" class="tab-content">
+        <div class="section-toolbar">
+          <h2>Usuarios Registrados</h2>
+          <button id="btn-open-create-user" class="btn-primary" type="button">+ Crear Usuario</button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Usuario</th>
+                <th>Rol</th>
+                <th>Estado</th>
+                <th>Fecha Creación</th>
+                <th>Último Acceso</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <!-- Loaded via JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+
+
+      <!-- 2.5 TAB: ACCESS GROUPS -->
+      <section id="tab-groups" class="tab-content">
+        <div class="section-toolbar">
+          <div>
+            <h2>Grupos de Acceso</h2>
+            <p class="text-muted" style="margin-top:.35rem;">
+              Todo espectador debe pertenecer al menos a un grupo y solo puede ver los canales permitidos por sus grupos. Los administradores siempre tienen acceso completo.
+            </p>
+          </div>
+          <button id="btn-open-create-group" class="btn-primary" type="button">+ Crear Grupo</button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Grupo</th>
+                <th>Usuarios</th>
+                <th>Canales Permitidos</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="groups-tbody">
+              <tr><td colspan="5" style="text-align:center;">Cargando grupos...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 3. TAB: LIBRARY -->
+      <section id="tab-library" class="tab-content">
+        <div class="admin-card optimization-card">
+          <div class="optimization-header">
+            <div>
+              <h3>Compatibilidad MP4</h3>
+              <p class="text-muted">Normaliza la biblioteca a MP4. Reutiliza los streams compatibles sin pérdida y transcodifica solo lo necesario.</p>
+            </div>
+            <div class="optimization-actions">
+              <button id="btn-analyze-normalization" class="btn-secondary" type="button">🔍 Analizar MP4</button>
+              <button id="btn-normalize-library" class="btn-primary" type="button" disabled>🎞️ Convertir a MP4</button>
+              <button id="btn-stop-normalization" class="btn-danger hidden" type="button">⏹ Detener</button>
+            </div>
+          </div>
+
+          <div id="normalization-summary" class="optimization-summary hidden">
+            <div class="stats-row optimization-stats">
+              <div class="stat-box"><span id="norm-total" class="stat-num">0</span><span class="stat-lbl">Archivos</span></div>
+              <div class="stat-box"><span id="norm-ready" class="stat-num">0</span><span class="stat-lbl">Listos</span></div>
+              <div class="stat-box"><span id="norm-convert" class="stat-num">0</span><span class="stat-lbl">A convertir</span></div>
+              <div class="stat-box"><span id="norm-remux" class="stat-num">0</span><span class="stat-lbl">Remux</span></div>
+              <div class="stat-box"><span id="norm-transcode" class="stat-num">0</span><span class="stat-lbl">Transcodificar</span></div>
+              <div class="stat-box"><span id="norm-errors" class="stat-num">0</span><span class="stat-lbl">Bloqueados/error</span></div>
+            </div>
+            <div class="optimization-space text-muted">
+              <span>Protegidos: <strong id="norm-protected">0</strong></span>
+              <span>Escaneo: <strong id="norm-scan-time">0 s</strong></span>
+            </div>
+          </div>
+
+          <div id="normalization-progress" class="optimization-progress hidden">
+            <div class="optimization-progress-row">
+              <strong id="norm-job-status">Preparando...</strong>
+              <span id="norm-job-count">0 / 0</span>
+            </div>
+            <div class="optimization-progress-track"><div id="norm-job-bar" class="optimization-progress-bar"></div></div>
+            <div class="optimization-progress-row text-muted">
+              <span id="norm-job-file">—</span>
+              <span id="norm-job-result">Remux: 0 · Transcodificados: 0 · Errores: 0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-card optimization-card">
+          <div class="optimization-header">
+            <div>
+              <h3>⚡ Optimización de Biblioteca</h3>
+              <p class="text-muted">Analiza el estado real de los archivos con FFprobe. No guarda flags ni metadatos de optimización.</p>
+            </div>
+            <div class="optimization-actions">
+              <button id="btn-analyze-library" class="btn-secondary" type="button">🔍 Analizar biblioteca</button>
+              <button id="btn-optimize-library" class="btn-primary" type="button" disabled>⚡ Optimizar biblioteca</button>
+              <button id="btn-stop-optimization" class="btn-danger hidden" type="button">⏹ Detener</button>
+            </div>
+          </div>
+
+          <div class="optimization-settings" id="optimization-settings">
+            <div class="optimization-settings-title">
+              <div>
+                <h4>Perfil de optimización</h4>
+                <p class="text-muted">Estos valores se aplican al próximo análisis y a la siguiente optimización.</p>
+              </div>
+              <button id="btn-save-optimization-profile" class="btn-secondary" type="button">Guardar configuración</button>
+            </div>
+
+            <div class="optimization-settings-grid">
+              <label class="optimization-setting">
+                <span>Resolución máxima</span>
+                <select id="opt-profile-resolution">
+                  <option value="1080p">1080p — conservar Full HD</option>
+                  <option value="720p">720p — más ahorro, menos detalle</option>
+                  <option value="480p">480p — máximo ahorro, pérdida visible</option>
+                </select>
+                <small>Los vídeos con menor resolución nunca se escalan hacia arriba.</small>
+              </label>
+
+              <label class="optimization-setting">
+                <span>Calidad / compresión</span>
+                <select id="opt-profile-crf">
+                  <option value="20">Muy alta — archivos mayores</option>
+                  <option value="22">Alta — poco sacrificio</option>
+                  <option value="24">Equilibrada — recomendado</option>
+                  <option value="26">Ahorro — más compresión</option>
+                  <option value="28">Fuerte — mayor pérdida de calidad</option>
+                </select>
+                <small>CRF menor = más calidad y tamaño; CRF mayor = más compresión y pérdida.</small>
+              </label>
+            </div>
+
+            <div id="opt-resolution-warning" class="optimization-warning hidden">
+              <strong>⚠ Reducción irreversible de resolución</strong>
+              <p>Al optimizar, los archivos que superen la resolución elegida serán reemplazados por versiones reducidas. Cambiar después el ajuste a 1080p <strong>no recuperará</strong> el detalle eliminado. Conserva una copia externa si necesitas poder volver al original.</p>
+            </div>
+
+            <details class="optimization-advanced">
+              <summary>Avanzado: bitrates de referencia</summary>
+              <p class="text-muted">Se usan para decidir si un archivo ya es suficientemente eficiente y para estimar el ahorro. <strong>No son un límite exacto de salida:</strong> FFmpeg codifica HEVC con CRF y el bitrate real varía según cada escena.</p>
+              <div class="optimization-bitrate-grid">
+                <label class="optimization-setting">
+                  <span>1080p</span>
+                  <div class="optimization-input-unit"><input id="opt-profile-bitrate-1080" type="number" min="0.1" max="20" step="0.1"><span>Mbps</span></div>
+                </label>
+                <label class="optimization-setting">
+                  <span>720p</span>
+                  <div class="optimization-input-unit"><input id="opt-profile-bitrate-720" type="number" min="0.1" max="12" step="0.1"><span>Mbps</span></div>
+                </label>
+                <label class="optimization-setting">
+                  <span>SD / 480p</span>
+                  <div class="optimization-input-unit"><input id="opt-profile-bitrate-sd" type="number" min="0.1" max="8" step="0.1"><span>Mbps</span></div>
+                </label>
+              </div>
+            </details>
+            <div id="opt-profile-status" class="optimization-profile-status text-muted"></div>
+          </div>
+
+          <div id="optimization-summary" class="optimization-summary hidden">
+            <div class="stats-row optimization-stats">
+              <div class="stat-box"><span id="opt-total" class="stat-num">0</span><span class="stat-lbl">Vídeos</span></div>
+              <div class="stat-box"><span id="opt-ok" class="stat-num">0</span><span class="stat-lbl">Ya optimizados</span></div>
+              <div class="stat-box"><span id="opt-candidates" class="stat-num">0</span><span class="stat-lbl">Candidatos</span></div>
+              <div class="stat-box"><span id="opt-skipped" class="stat-num">0</span><span class="stat-lbl">No conviene / protegidos</span></div>
+              <div class="stat-box"><span id="opt-errors" class="stat-num">0</span><span class="stat-lbl">Errores</span></div>
+            </div>
+            <div class="optimization-space">
+              <span>Tamaño actual: <strong id="opt-current-size">—</strong></span>
+              <span>Estimado: <strong id="opt-estimated-size">—</strong></span>
+              <span>Ahorro estimado: <strong id="opt-savings">—</strong></span>
+              <span>Escaneo: <strong id="opt-scan-time">—</strong></span>
+            </div>
+          </div>
+
+          <div id="optimization-progress" class="optimization-progress hidden">
+            <div class="optimization-progress-row">
+              <strong id="opt-job-status">Preparando...</strong>
+              <span id="opt-job-count">0 / 0</span>
+            </div>
+            <div class="optimization-progress-track"><div id="opt-job-bar" class="optimization-progress-bar"></div></div>
+            <div class="optimization-progress-row text-muted">
+              <span id="opt-job-file">—</span>
+              <span id="opt-job-saved">Ahorrado: 0 B</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="library-browser">
+          <div class="library-browser-header">
+            <div>
+              <h2>Biblioteca Multimedia</h2>
+              <p class="text-muted">Explora el contenido con la misma jerarquía que existe dentro de cada canal.</p>
+            </div>
+            <div class="library-browser-tools">
+              <div class="search-box library-search-box">
+                <input type="text" id="library-search" placeholder="Buscar serie, película, franquicia o episodio..." autocomplete="off" />
+              </div>
+              <div class="library-view-toggle" role="group" aria-label="Vista de biblioteca">
+                <button id="library-view-tree" class="btn-sm btn-outline active" type="button">Estructura</button>
+                <button id="library-view-files" class="btn-sm btn-outline" type="button">Archivos</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="library-summary" class="library-summary"></div>
+          <div id="library-content" class="library-content" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: Crear Usuario -->
+  <div id="modal-create-user" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="create-user-title">
+    <div class="modal-card">
+      <h3 id="create-user-title">Crear Nuevo Usuario</h3>
+      <form id="form-create-user">
+        <div class="form-group">
+          <label for="new-username">Nombre de Usuario</label>
+          <input type="text" id="new-username" required minlength="3" maxlength="50" placeholder="Ej: espectador1" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="new-password">Contraseña</label>
+          <input type="password" id="new-password" required minlength="6" placeholder="Mínimo 6 caracteres" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label for="new-role">Rol</label>
+          <select id="new-role">
+            <option value="user">Espectador (user)</option>
+            <option value="admin">Administrador (admin)</option>
+          </select>
+        </div>
+        <div class="form-group" id="new-user-group-field">
+          <label for="new-user-group">Grupo de acceso</label>
+          <select id="new-user-group" required></select>
+          <p id="new-user-group-help" class="text-muted" style="margin-top:.35rem; font-size:.86rem;">
+            Los espectadores deben pertenecer a un grupo.
+          </p>
+        </div>
+        <div id="create-user-error" class="alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-outline modal-close">Cancelar</button>
+          <button type="submit" class="btn-primary">Crear</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+
+  <!-- Modal: Crear / Editar Grupo -->
+  <div id="modal-access-group" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="access-group-title">
+    <div class="modal-card modal-card-wide">
+      <h3 id="access-group-title">Crear Grupo de Acceso</h3>
+      <form id="form-access-group">
+        <input type="hidden" id="access-group-id" />
+        <div class="form-group">
+          <label for="access-group-name">Nombre del grupo</label>
+          <input type="text" id="access-group-name" required maxlength="80" placeholder="Ej: Invitados" />
+        </div>
+
+        <div class="access-grid">
+          <div>
+            <label class="access-list-title">Usuarios del grupo</label>
+            <div id="access-group-users" class="access-check-list"></div>
+          </div>
+          <div>
+            <label class="access-list-title">Canales permitidos</label>
+            <div id="access-group-channels" class="access-check-list"></div>
+          </div>
+        </div>
+
+        <p class="text-muted access-help">Si un usuario pertenece a varios grupos, obtiene la unión de los canales permitidos en todos ellos.</p>
+        <div id="access-group-error" class="alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-outline modal-close">Cancelar</button>
+          <button type="submit" class="btn-primary">Guardar Grupo</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Restablecer Contraseña -->
+  <div id="modal-reset-password" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="reset-password-title">
+    <div class="modal-card">
+      <h3 id="reset-password-title">Restablecer Contraseña</h3>
+      <p id="reset-target-user-label" class="subtitle">Usuario: —</p>
+      <form id="form-reset-password">
+        <input type="hidden" id="reset-user-id" />
+        <div class="form-group">
+          <label for="reset-new-password">Nueva Contraseña</label>
+          <input type="password" id="reset-new-password" required minlength="6" placeholder="Mínimo 6 caracteres" autocomplete="new-password" />
+        </div>
+        <div id="reset-password-error" class="alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-outline modal-close">Cancelar</button>
+          <button type="submit" class="btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Configuración portable del canal -->
+  <div id="modal-config-channel" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="config-channel-title">
+    <div class="modal-card modal-card-channel-config">
+      <div class="portable-config-header">
+        <div>
+          <h3 id="config-channel-title">Configurar Canal: <span id="config-channel-name">—</span></h3>
+          <p class="subtitle">Todo lo que guardes aquí viaja con la carpeta del canal.</p>
+        </div>
+        <span class="portable-status">Portable</span>
+      </div>
+
+      <form id="form-config-channel">
+        <input type="hidden" id="config-channel-id" />
+
+        <div class="config-section">
+          <div class="config-section-heading">
+            <div>
+              <h4>Canal</h4>
+              <p class="text-muted">Nombre visible y contenido permitido cuando ninguna franja específica está activa.</p>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="config-channel-display-name">Nombre visible</label>
+            <input type="text" id="config-channel-display-name" required maxlength="120" />
+          </div>
+
+          <div class="form-group">
+            <label>Programación predeterminada</label>
+            <div class="portable-check-row">
+              <label class="portable-check"><input type="checkbox" id="config-default-series" value="series" /> <span>Series</span></label>
+              <label class="portable-check"><input type="checkbox" id="config-default-movies" value="movies" /> <span>Películas</span></label>
+            </div>
+            <small class="text-muted">Se usa fuera de las franjas horarias configuradas.</small>
+          </div>
+
+          <div class="form-group">
+            <label>Pesos predeterminados por tipo</label>
+            <div class="schedule-weight-grid default-weight-grid">
+              <label>
+                <span>Series</span>
+                <input type="number" id="config-default-weight-series" min="1" max="1000" step="1" value="1" />
+              </label>
+              <label>
+                <span>Películas</span>
+                <input type="number" id="config-default-weight-movies" min="1" max="1000" step="1" value="1" />
+              </label>
+            </div>
+            <small class="text-muted">Son pesos relativos. Por ejemplo, 80 para Series y 20 para Películas equivale aproximadamente a una selección 80/20 cuando ambos tipos están disponibles.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="portable-check">
+              <input type="checkbox" id="config-sensitive-content" />
+              <span>Contenido sensible</span>
+            </label>
+            <small class="text-muted">El canal permanecerá oculto en el reproductor hasta que cada usuario habilite voluntariamente este tipo de contenido.</small>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-section-heading config-section-heading-actions">
+            <div>
+              <h4>Horario de transmisión</h4>
+              <p class="text-muted">La primera franja que coincida determina qué tipo de contenido puede iniciar a continuación. Nunca corta una transmisión en curso.</p>
+            </div>
+            <button id="btn-add-schedule-slot" class="btn-secondary btn-sm" type="button">+ Añadir franja</button>
+          </div>
+          <div id="schedule-slots-container" class="schedule-slots"></div>
+        </div>
+
+        <div id="config-channel-error" class="alert-error hidden"></div>
+        <div id="config-channel-success" class="portable-success hidden">Configuración guardada.</div>
+
+        <div class="modal-actions portable-sticky-actions">
+          <button type="button" class="btn-outline modal-close">Cerrar</button>
+          <button type="submit" class="btn-primary">Guardar Canal</button>
+        </div>
+      </form>
+
+      <div class="config-section portable-content-section">
+        <div class="config-section-heading">
+          <div>
+            <h4>Series</h4>
+            <p class="text-muted">Cada serie mantiene su propia cantidad de episodios por emisión y regla de episodio inicial.</p>
+          </div>
+        </div>
+        <div id="config-series-list" class="portable-config-list"></div>
+      </div>
+
+      <div class="config-section portable-content-section">
+        <div class="config-section-heading">
+          <div>
+            <h4>Películas y franquicias</h4>
+            <p class="text-muted">Las franquicias conservan modo y peso en franchise.yaml. Las películas sueltas guardan su peso dentro de channel.yaml.</p>
+          </div>
+        </div>
+        <div id="config-franchises-list" class="portable-config-list"></div>
+        <h5 class="portable-subheading">Películas sueltas</h5>
+        <div id="config-loose-movies-list" class="loose-movie-weights"></div>
+        <p id="config-loose-movies" class="text-muted portable-loose-movies"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Configurar Serie -->
+  <div id="modal-config-series" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="config-series-title">
+    <div class="modal-card">
+      <h3 id="config-series-title">Configurar Serie: <span id="config-series-name">—</span></h3>
+      <p id="config-series-meta" class="subtitle">—</p>
+      <form id="form-config-series">
+        <input type="hidden" id="config-series-channel-id" />
+        <input type="hidden" id="config-series-relative-dir" />
+
+        <div class="form-group">
+          <label for="config-series-episodes-per-airing">Episodios por emisión</label>
+          <input type="number" id="config-series-episodes-per-airing" required min="1" max="100" step="1" />
+          <small class="text-muted">Una vez elegida la serie, reproduce esta cantidad de episodios consecutivos.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="config-series-start-mode">Episodio inicial del bloque</label>
+          <select id="config-series-start-mode">
+            <option value="any">Cualquier episodio</option>
+            <option value="odd">Solo episodio impar</option>
+            <option value="even">Solo episodio par</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="config-series-playback-mode">Modo de reproducción</label>
+          <select id="config-series-playback-mode">
+            <option value="random">Aleatorio</option>
+            <option value="sequential">Secuencial</option>
+          </select>
+          <small class="text-muted">Aleatorio elige un inicio nuevo para cada bloque. Secuencial continúa desde el último episodio emitido de esta serie; el progreso es estado del servidor y no se escribe en el YAML.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="config-series-selection-weight">Peso de selección</label>
+          <input type="number" id="config-series-selection-weight" required min="1" max="1000" step="1" value="1" />
+          <small class="text-muted">Determina con qué frecuencia aparece esta serie frente a otras series elegibles. Los pesos son relativos.</small>
+        </div>
+
+        <div id="config-series-error" class="alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-outline modal-close">Cancelar</button>
+          <button type="submit" class="btn-primary">Guardar Serie</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Configurar Franquicia -->
+  <div id="modal-config-franchise" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="config-franchise-title">
+    <div class="modal-card">
+      <h3 id="config-franchise-title">Configurar Franquicia: <span id="config-franchise-title-name">—</span></h3>
+      <p id="config-franchise-meta" class="subtitle">—</p>
+      <form id="form-config-franchise">
+        <input type="hidden" id="config-franchise-channel-id" />
+        <input type="hidden" id="config-franchise-relative-dir" />
+
+        <div class="form-group">
+          <label for="config-franchise-name">Nombre visible de la franquicia</label>
+          <input type="text" id="config-franchise-name" required maxlength="160" />
+          <small class="text-muted">Este nombre se mostrará en la interfaz y viajará con la carpeta de películas.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="config-franchise-playback-mode">Modo de reproducción</label>
+          <select id="config-franchise-playback-mode">
+            <option value="random">Aleatorio</option>
+            <option value="sequential">Secuencial</option>
+          </select>
+          <small class="text-muted">En secuencial, la próxima película se elige por orden de nombre/ruta después de la última emitida. Puedes usar prefijos numéricos para fijar un orden de saga exacto.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="config-franchise-selection-weight">Peso de selección</label>
+          <input type="number" id="config-franchise-selection-weight" required min="1" max="1000" step="1" value="1" />
+          <small class="text-muted">Determina con qué frecuencia aparece esta franquicia frente a otras franquicias o películas sueltas elegibles.</small>
+        </div>
+
+        <div id="config-franchise-error" class="alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-outline modal-close">Cancelar</button>
+          <button type="submit" class="btn-primary">Guardar Franquicia</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

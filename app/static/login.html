@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Iniciar Sesión — SimpliTV</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="auth-body">
+  <div class="auth-container">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="channel-badge">
+          <span class="live-dot"></span>
+          <span class="channel-name">SIMPLITV</span>
+        </div>
+        <h1>Acceso Privado</h1>
+        <p>Introduce tus credenciales para acceder a la emisión.</p>
+      </div>
+
+      <div id="login-error" class="alert-error hidden"></div>
+
+      <form id="login-form" class="auth-form" autocomplete="off">
+        <div class="form-group">
+          <label for="username">Usuario</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            required
+            placeholder="Introduce tu usuario"
+            autofocus
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Contraseña</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            placeholder="Introduce tu contraseña"
+          />
+        </div>
+
+        <button type="submit" id="btn-submit" class="btn-primary btn-block">
+          Iniciar Sesión
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errBox = document.getElementById('login-error');
+      const btn = document.getElementById('btn-submit');
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      errBox.classList.add('hidden');
+      btn.disabled = true;
+      btn.textContent = 'Verificando...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          errBox.textContent = data.detail || 'Usuario o contraseña incorrectos.';
+          errBox.classList.remove('hidden');
+          btn.disabled = false;
+          btn.textContent = 'Iniciar Sesión';
+          return;
+        }
+
+        // Redirect
+        const urlParams = new URLSearchParams(window.location.search);
+        const nextUrl = urlParams.get('next') || (data.role === 'admin' ? '/admin' : '/');
+        window.location.href = nextUrl;
+      } catch (err) {
+        errBox.textContent = 'Error de conexión con el servidor.';
+        errBox.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Iniciar Sesión';
+      }
+    });
+  </script>
+</body>
+</html>

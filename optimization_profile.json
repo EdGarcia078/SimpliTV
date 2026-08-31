@@ -1,0 +1,14 @@
+{
+  "video_codec": "hevc",
+  "max_width": 854,
+  "max_height": 480,
+  "crf": 20,
+  "preset": "medium",
+  "min_savings_ratio": 0.08,
+  "target_video_bitrates": {
+    "1080p": 2500000,
+    "720p": 1500000,
+    "sd": 900000
+  },
+  "assumed_audio_bitrate": 160000
+}
