@@ -1,10 +1,18 @@
 import argparse
+import uuid
 from datetime import datetime, timezone, timedelta
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, create_engine, select
 
+import app.db.session as db_session
 from app.cli import create_admin_cmd
-from app.core.security import SESSION_COOKIE_NAME, generate_session_token, hash_password
+from app.core.security import (
+    SESSION_COOKIE_NAME,
+    generate_session_token,
+    hash_password,
+    verify_password,
+)
+from app.db.session import ensure_default_admin
 from app.models.user import User, UserSession
 from app.models.access import AccessGroup, UserAccessGroup
 
@@ -272,6 +280,63 @@ def test_admin_cannot_delete_or_deactivate_self(admin_client, admin_user):
 # ==========================================
 # 4. CLI CREATE-ADMIN TEST
 # ==========================================
+
+
+def test_database_initialization_seeds_default_admin_once(tmp_path, monkeypatch):
+    db_path = tmp_path / f"default_admin_{uuid.uuid4().hex}.db"
+    isolated_engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+    )
+    monkeypatch.setattr(db_session, "engine", isolated_engine)
+
+    db_session.create_db_and_tables()
+    with Session(isolated_engine) as session:
+        created = session.exec(select(User).where(User.username == "admin")).one()
+        original_hash = created.password_hash
+        assert created.role == "admin"
+        assert created.is_active is True
+        assert verify_password("admin123", original_hash)
+
+    db_session.create_db_and_tables()
+    with Session(isolated_engine) as session:
+        users = session.exec(select(User)).all()
+        assert len(users) == 1
+        assert users[0].password_hash == original_hash
+
+
+def test_default_admin_is_created_and_can_log_in(unauth_client, test_db: Session):
+    created = ensure_default_admin(test_db)
+
+    assert created is not None
+    assert created.username == "admin"
+    assert created.role == "admin"
+    assert created.is_active is True
+    assert created.password_hash != "admin123"
+    assert verify_password("admin123", created.password_hash)
+
+    response = unauth_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123"},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+
+
+def test_default_admin_seed_is_idempotent_and_never_overwrites_users(test_db: Session):
+    existing = User(
+        username="existing_admin",
+        password_hash=hash_password("private-password"),
+        role="admin",
+        is_active=True,
+    )
+    test_db.add(existing)
+    test_db.commit()
+
+    assert ensure_default_admin(test_db) is None
+    users = test_db.exec(select(User)).all()
+    assert [user.username for user in users] == ["existing_admin"]
+    assert verify_password("private-password", users[0].password_hash)
 
 def test_cli_create_admin(test_db: Session):
     args = argparse.Namespace(username="cli_admin", password="clipassword123")

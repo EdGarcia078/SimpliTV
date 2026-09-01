@@ -1,9 +1,20 @@
-from typing import Generator
+import logging
+from typing import Generator, Optional
+
 from sqlalchemy import inspect
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
+
 from app.core.config import settings
+from app.core.security import hash_password
+from app.models.user import User
 # Import preference models before metadata.create_all() so their tables are registered.
 from app.models.preferences import UserPreference, UserBlockedChannel  # noqa: F401
+
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "admin123"
 
 # SQLite connection args for multi-threaded async workers
 engine = create_engine(
@@ -21,6 +32,34 @@ def create_db_and_tables() -> None:
     _migrate_channel_folder_name()
     _migrate_episode_media_fields()
     _migrate_episode_title_field()
+    with Session(engine) as session:
+        ensure_default_admin(session)
+
+
+def ensure_default_admin(session: Session) -> Optional[User]:
+    """Create the first administrator for a brand-new installation.
+
+    The seed only runs while the users table is completely empty. Once any user
+    exists, startup never resets credentials, changes roles, reactivates an
+    account, or recreates the well-known default administrator.
+    """
+    if session.exec(select(User.id).limit(1)).first() is not None:
+        return None
+
+    admin = User(
+        username=DEFAULT_ADMIN_USERNAME,
+        password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+        role="admin",
+        is_active=True,
+    )
+    session.add(admin)
+    session.commit()
+    session.refresh(admin)
+    logger.warning(
+        "Created the default SimpliTV administrator '%s'. Change its password after first login.",
+        DEFAULT_ADMIN_USERNAME,
+    )
+    return admin
 
 
 
