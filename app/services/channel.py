@@ -221,19 +221,49 @@ class ChannelEngine:
         """
         Internal transition to the next episode for a specific channel, protected by its lock.
         """
-        # Recalculate at the real transition boundary. The cached next item is a
-        # preview only; a channel.yaml slot may have changed while the current
-        # episode/movie was still playing.
-        candidate = select_next_episode(
-            session,
-            pb.channel_id,
-            pb._current_episode_id,
-            pb._consecutive_plays,
-            at_time=now,
-        )
-
         channel = session.get(Channel, pb.channel_id)
-        if not channel or not candidate:
+        if not channel:
+            logger.warning(f"ChannelEngine: Cannot advance missing channel ID {pb.channel_id}.")
+            return
+
+        # ``_next_episode_id`` is a reservation, not merely a decorative
+        # preview. Re-running the random/weighted selector here used to make the
+        # UI advertise one valid item and then transmit a different valid item.
+        # Keep the advertised reservation whenever it is still part of the
+        # effective candidate set at the real transition boundary. Configuration
+        # or library changes normally refresh the reservation proactively; this
+        # validation is the final safeguard for deleted files, direct database
+        # edits, schedule-boundary drift, and missed filesystem events.
+        candidate = (
+            session.get(MediaItem, pb._next_episode_id)
+            if pb._next_episode_id is not None
+            else None
+        )
+        reservation_valid = (
+            candidate is not None
+            and is_item_eligible_for_selection(
+                session,
+                channel,
+                candidate,
+                at_time=now,
+            )
+        )
+        if not reservation_valid:
+            if pb._next_episode_id is not None:
+                logger.info(
+                    "Discarding stale next reservation ID %s for channel '%s'.",
+                    pb._next_episode_id,
+                    channel.name,
+                )
+            candidate = select_next_episode(
+                session,
+                pb.channel_id,
+                pb._current_episode_id,
+                pb._consecutive_plays,
+                at_time=now,
+            )
+
+        if not candidate:
             logger.warning(f"ChannelEngine: Cannot advance channel ID {pb.channel_id}, no episodes available.")
             pb._current_episode_id = None
             pb._consecutive_plays = 1
@@ -458,12 +488,12 @@ class ChannelEngine:
 
         next_ep = session.get(MediaItem, pb._next_episode_id) if pb._next_episode_id else None
 
-        # Defense in depth for stale previews (for example after an external
-        # channel.yaml edit or an older persisted state). The actual transition
-        # always recalculates its candidate, so the API must never advertise a
-        # movie when the next boundary only allows series, or vice versa. We do
-        # not re-roll valid random candidates on every request; only a preview
-        # whose media type is incompatible with the effective schedule is healed.
+        # Defense in depth for stale reservations (for example after an external
+        # channel.yaml edit or an older persisted state). The transition consumes
+        # this same reservation when it remains valid, so the API must never keep
+        # advertising a movie when the next boundary only allows series, or vice
+        # versa. We do not re-roll valid random candidates on every request; only
+        # a reservation incompatible with the effective schedule is healed.
         transition_time = (
             (pb._started_at + timedelta(seconds=pb._duration))
             if pb._started_at
