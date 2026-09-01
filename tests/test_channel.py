@@ -81,7 +81,7 @@ async def test_two_clients_get_same_episode_and_position(client, test_db, sample
 
 @pytest.mark.asyncio
 async def test_lazy_transition_when_episode_finishes(test_db: Session):
-    """Lazy evaluation: when time exceeds duration, next request triggers transition."""
+    """A late request advances at the original boundary, not at request time."""
     engine = ChannelEngine()
 
     channel = _make_channel(test_db, "Lazy Test Channel")
@@ -94,15 +94,52 @@ async def test_lazy_transition_when_episode_finishes(test_db: Session):
     assert state1 is not None
     initial_ep_id = state1.episode.id
 
-    # Simulate that started_at happened 20 seconds ago (> 10s duration)
+    # Simulate returning three seconds after the current item should have ended.
     pb = engine._channels[channel.id]  # type: ignore
-    pb._started_at = datetime.now(timezone.utc) - timedelta(seconds=20)
+    pb._started_at = datetime.now(timezone.utc) - timedelta(seconds=pb._duration + 3)
 
     # Next call should lazily advance to next episode
     state2 = await engine.get_current_state(test_db, channel.id)  # type: ignore
     assert state2 is not None
     assert state2.episode.id != initial_ep_id
-    assert state2.current_time < 2.0  # Reset offset in new episode
+    assert 2.5 <= state2.current_time <= 4.5
+
+
+@pytest.mark.asyncio
+async def test_long_inactivity_catches_up_every_elapsed_transition(test_db: Session):
+    """Several unattended boundaries preserve the wall-clock playback offset."""
+    engine = ChannelEngine()
+    channel = _make_channel(test_db, "Long Inactivity Channel")
+    episode = _make_episode(
+        test_db,
+        channel.id,
+        "Always On",
+        duration=10.0,
+        rel_suffix="Always_On_01",
+    )
+
+    await engine.initialize(test_db)
+    pb = engine._channels[channel.id]  # type: ignore
+    pb._started_at = datetime.now(timezone.utc) - timedelta(seconds=25)
+    expected_started_at = pb._started_at + timedelta(seconds=20)
+    queue = engine.subscribe(channel.id)
+    initial_revision = queue.get_nowait()
+
+    result = await engine.get_current_state(test_db, channel.id)  # type: ignore
+
+    assert result is not None
+    assert result.episode.id == episode.id
+    assert 4.5 <= result.current_time <= 6.5
+    assert abs((result.started_at - expected_started_at).total_seconds()) < 0.2
+    assert queue.get_nowait() == initial_revision + 1
+    test_db.refresh(episode)
+    assert episode.play_count == 3
+    persisted = test_db.get(ChannelState, channel.id)
+    assert persisted is not None
+    persisted_started_at = persisted.started_at
+    if persisted_started_at.tzinfo is None:
+        persisted_started_at = persisted_started_at.replace(tzinfo=timezone.utc)
+    assert abs((persisted_started_at - expected_started_at).total_seconds()) < 0.2
 
 
 @pytest.mark.asyncio
@@ -140,21 +177,21 @@ async def test_reboot_recovery_active_broadcast(test_db: Session):
 
 @pytest.mark.asyncio
 async def test_reboot_recovery_expired_broadcast(test_db: Session):
-    """If server restarts after broadcast already expired, start a fresh broadcast immediately."""
+    """A restart catches up an expired broadcast without resetting its progress."""
     channel = _make_channel(test_db, "Recovery Expired Channel")
     ep = _make_episode(
-        test_db, channel.id, "Durarara", duration=30.0, play_count=1,  # type: ignore
+        test_db, channel.id, "Durarara", duration=10.0, play_count=1,  # type: ignore
         rel_suffix="DRR_01"
     )
 
-    # Persisted state started 5 hours ago (well past 30s duration)
-    ancient_started = datetime.now(timezone.utc) - timedelta(hours=5)
+    # Two complete airings and roughly five seconds have elapsed while offline.
+    ancient_started = datetime.now(timezone.utc) - timedelta(seconds=25)
     state = ChannelState(
         channel_id=channel.id,  # type: ignore
         current_episode_id=ep.id,  # type: ignore
         next_episode_id=ep.id,  # type: ignore
         started_at=ancient_started,
-        duration=30.0,
+        duration=10.0,
         updated_at=ancient_started,
     )
     test_db.add(state)
@@ -165,8 +202,12 @@ async def test_reboot_recovery_expired_broadcast(test_db: Session):
 
     result = await new_engine.get_current_state(test_db, channel.id)  # type: ignore
     assert result is not None
-    # Position should be fresh start (< 2s)
-    assert result.current_time < 2.0
+    assert result.episode.id == ep.id
+    assert 4.5 <= result.current_time <= 6.5
+    expected_started_at = ancient_started + timedelta(seconds=20)
+    assert abs((result.started_at - expected_started_at).total_seconds()) < 0.2
+    test_db.refresh(ep)
+    assert ep.play_count == 3
 
 
 @pytest.mark.asyncio
