@@ -1512,6 +1512,7 @@ a {
   .admin-header {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.75rem;
     padding-bottom: 1rem;
   }
 
@@ -1519,6 +1520,7 @@ a {
     width: 100%;
     gap: 0.65rem;
     justify-content: space-between;
+    padding: 0 0.15rem;
   }
 
   .admin-brand .channel-badge {
@@ -1529,42 +1531,101 @@ a {
   .admin-title {
     font-size: 1rem;
     text-align: right;
+    line-height: 1.2;
   }
 
   .admin-user-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     margin-left: 0;
     gap: 0.5rem;
-    justify-content: flex-start;
+    padding: 0.6rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
   }
 
   .admin-user-nav > * {
-    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
     text-align: center;
     justify-content: center;
   }
 
-  .user-badge {
-    min-height: 42px;
+  .admin-user-nav .user-badge {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: 28px;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding: 0.15rem 0.25rem;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .admin-user-nav .system-update-button {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-height: 46px;
+    padding: 0.65rem 0.8rem;
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 9px;
+  }
+
+  .admin-user-nav .system-update-button.update-available {
+    background: rgba(46, 213, 115, 0.16);
+  }
+
+  .admin-user-nav > a[href="/"] {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  #btn-admin-logout {
+    grid-column: 2;
+    grid-row: 3;
   }
 
   .admin-nav-tabs {
-    gap: 0.25rem;
-    margin-top: 1rem;
+    position: sticky;
+    top: max(0.35rem, env(safe-area-inset-top));
+    z-index: 20;
+    gap: 0.35rem;
+    margin-top: 0.85rem;
     margin-bottom: 1.25rem;
-    margin-left: -0.75rem;
-    margin-right: -0.75rem;
-    padding-left: 0.75rem;
-    padding-right: 0.75rem;
+    padding: 0.35rem;
+    background: rgba(18, 18, 22, 0.92);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(14px);
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .admin-nav-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .nav-tab {
     min-height: 44px;
     padding: 0.65rem 0.8rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid transparent;
+    border-radius: 8px;
     font-size: 0.85rem;
+    scroll-snap-align: start;
+  }
+
+  .nav-tab.active {
+    background: rgba(255, 71, 87, 0.14);
+    border-color: rgba(255, 71, 87, 0.35);
   }
 
   .dashboard-grid {
@@ -1765,8 +1826,16 @@ a {
     flex-basis: 100%;
   }
 
-  .admin-user-nav > * {
-    flex-basis: 100%;
+  .admin-user-nav {
+    gap: 0.4rem;
+    padding: 0.5rem;
+  }
+
+  .admin-user-nav > a[href="/"],
+  #btn-admin-logout {
+    padding-right: 0.45rem;
+    padding-left: 0.45rem;
+    font-size: 0.78rem;
   }
 
   .stats-row,
