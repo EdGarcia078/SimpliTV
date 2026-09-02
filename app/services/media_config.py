@@ -56,6 +56,7 @@ class PlaybackConfig(BaseModel):
 
 class SeriesConfig(BaseModel):
     version: int = CONFIG_VERSION
+    name: str = ""
     episodes_per_airing: int = Field(default=1, ge=1, le=100)
     start_episode: StartMediaItemConfig = Field(default_factory=StartMediaItemConfig)
     playback: PlaybackConfig = Field(default_factory=PlaybackConfig)
@@ -261,11 +262,12 @@ class EffectiveSchedule:
         return self.series_mode in {"only", "except"} or self.movies_mode in {"only", "except"}
 
 
-DEFAULT_SERIES_CONFIG = SeriesConfig()
-
-
 def default_channel_config(channel_name: str) -> ChannelConfig:
     return ChannelConfig(name=channel_name)
+
+
+def default_series_config(series_name: str) -> SeriesConfig:
+    return SeriesConfig(name=series_name)
 
 
 def default_franchise_config(franchise_name: str) -> FranchiseConfig:
@@ -328,7 +330,7 @@ def ensure_channel_config(channel_dir: Path) -> Path:
 
 def ensure_series_config(series_dir: Path) -> Path:
     path = series_dir / SERIES_CONFIG_FILENAME
-    _write_yaml_if_missing(path, DEFAULT_SERIES_CONFIG)
+    _write_yaml_if_missing(path, default_series_config(series_dir.name))
     return path
 
 
@@ -419,7 +421,18 @@ def load_channel_config(channel_dir: Path) -> ChannelConfig:
 
 def load_series_config(series_dir: Path) -> SeriesConfig:
     path = ensure_series_config(series_dir)
-    return _load_yaml_model(path, SeriesConfig, DEFAULT_SERIES_CONFIG, rewrite_defaults=True)
+    config = _load_yaml_model(
+        path,
+        SeriesConfig,
+        default_series_config(series_dir.name),
+        rewrite_defaults=True,
+    )
+    # Migrate pre-name series.yaml files while the original folder name is still
+    # available, so a later physical rename cannot silently change presentation.
+    if not config.name.strip():
+        config.name = series_dir.name
+        _write_yaml(path, config)
+    return config
 
 
 def load_franchise_config(franchise_dir: Path) -> FranchiseConfig:
@@ -461,11 +474,9 @@ def get_series_relative_dir(relative_path: str, media_type: str = "episode") -> 
         # Those do not encode the channel/show hierarchy, so callers must fall
         # back to media_title instead of treating each filename as a series.
         return None
-    if parts[1].casefold() == "series":
-        if len(parts) < 4:
-            return None
-        return Path(*parts[1:3]).as_posix()
-    return Path(parts[1]).as_posix()
+    if parts[1].casefold() != "series" or len(parts) not in {4, 5}:
+        return None
+    return Path(*parts[1:3]).as_posix()
 
 
 def get_franchise_relative_dir(relative_path: str, media_type: str = "episode") -> Optional[str]:
@@ -523,7 +534,8 @@ def load_series_config_for_episode(episode, *, fallback_channel=None, media_dir:
             playback=PlaybackConfig(mode="random"),
             selection_weight=1,
         )
-    return DEFAULT_SERIES_CONFIG.model_copy(deep=True)
+    series_name = str(getattr(episode, "media_title", "") or "Sin nombre")
+    return default_series_config(series_name)
 
 
 def load_franchise_config_for_movie(movie, *, media_dir: Optional[Path] = None) -> Optional[FranchiseConfig]:

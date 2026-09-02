@@ -62,7 +62,7 @@ def test_admin_panel_reads_and_writes_portable_configuration(client, test_db, sa
     )
     assert series_save.status_code == 200, series_save.text
 
-    series_yaml = yaml.safe_load((sample_media_dir / "Canal 1" / "JoJo" / "series.yaml").read_text())
+    series_yaml = yaml.safe_load((sample_media_dir / "Canal 1" / "Series" / "JoJo" / "series.yaml").read_text())
     assert series_yaml["episodes_per_airing"] == 3
     assert series_yaml["start_episode"]["mode"] == "odd"
     assert series_yaml["playback"]["mode"] == "random"

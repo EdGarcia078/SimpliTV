@@ -31,7 +31,9 @@ def make_probe(**overrides):
 
 
 def test_high_bitrate_h264_is_candidate():
-    item = classify_probe(make_probe())
+    # Keep size/duration consistent with the declared high bitrate so the
+    # estimated savings calculation sees a genuinely oversized source.
+    item = classify_probe(make_probe(size=1_500_000_000))
     assert item.status == "optimize"
     assert item.estimated_savings > 0
 

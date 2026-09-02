@@ -80,13 +80,13 @@ def test_sensitive_mode_and_personal_channel_blocking(auth_client, test_db, samp
     assert auth_client.get(f"/api/channels/{channel.id}/now-playing").status_code == 403
 
     # Direct episode metadata and stream URLs are protected too, not just the selector.
-    media_path = sample_media_dir / "Canal 1" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
+    media_path = sample_media_dir / "Canal 1" / "Series" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
     episode = MediaItem(
         channel_id=channel.id,
         media_title="Bocchi the Rock",
         season_number=1,
         episode_number=1,
-        relative_path="Canal 1/Bocchi the Rock/Season 1/S01E01.mp4",
+        relative_path="Canal 1/Series/Bocchi the Rock/Season 1/S01E01.mp4",
         file_path=str(media_path),
         file_size=media_path.stat().st_size,
         duration=1.0,

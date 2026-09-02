@@ -48,15 +48,15 @@ def test_db(test_temp_dir):
 def sample_media_dir(test_temp_dir):
     """Create a sample directory structure with real dummy video files.
 
-    Hierarchy: Channel / Show / Season / MediaItem
-    This matches the official media/<CHANNEL>/<SHOW>/<SEASON>/<EPISODE> structure.
+    Hierarchy: Channel / Series / Show / Season / MediaItem
+    This matches the canonical SimpliTV structure.
     """
     import uuid
     media_root = test_temp_dir / f"sample_media_{uuid.uuid4().hex}"
     media_root.mkdir(parents=True, exist_ok=True)
 
-    # 1. Canal 1 / Bocchi the Rock / Season 1 / S01E01.mp4
-    bocchi_dir = media_root / "Canal 1" / "Bocchi the Rock" / "Season 1"
+    # 1. Canal 1 / Series / Bocchi the Rock / Season 1 / S01E01.mp4
+    bocchi_dir = media_root / "Canal 1" / "Series" / "Bocchi the Rock" / "Season 1"
     bocchi_dir.mkdir(parents=True, exist_ok=True)
     bocchi_ep1 = bocchi_dir / "S01E01.mp4"
 
@@ -65,8 +65,8 @@ def sample_media_dir(test_temp_dir):
         if not bocchi_ep1.exists() or bocchi_ep1.stat().st_size == 0:
             bocchi_ep1.write_bytes(b"\x00" * 4096)
 
-    # 2. Canal 1 / JoJo / Season 1 / S01E02 - The Prophecy.mp4
-    jojo_dir = media_root / "Canal 1" / "JoJo" / "Season 1"
+    # 2. Canal 1 / Series / JoJo / Season 1 / S01E02 - The Prophecy.mp4
+    jojo_dir = media_root / "Canal 1" / "Series" / "JoJo" / "Season 1"
     jojo_dir.mkdir(parents=True, exist_ok=True)
     jojo_ep2 = jojo_dir / "S01E02 - The Prophecy.mp4"
     if not jojo_ep2.exists():

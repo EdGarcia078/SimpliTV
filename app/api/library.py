@@ -5,6 +5,7 @@ from app.db.session import get_session
 from app.models.media import MediaItem, ScanResult
 from app.models.user import User
 from app.services.scanner import scan_library
+from app.services.channel import channel_engine
 
 router = APIRouter(prefix="/library", tags=["Library"], dependencies=[Depends(get_current_admin)])
 
@@ -15,7 +16,9 @@ async def trigger_scan(session: Session = Depends(get_session)) -> ScanResult:
     Trigger a filesystem scan of the configured media directory.
     Updates the database with all discovered media items. (Admin only)
     """
-    return await scan_library(session)
+    result = await scan_library(session)
+    await channel_engine.notify_library_changed(session)
+    return result
 
 
 @router.get("/stats", summary="Library Statistics")

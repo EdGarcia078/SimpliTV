@@ -10,6 +10,7 @@ from app.models.user import User
 from app.services.channel import channel_engine
 from app.services.access import get_player_channel_ids, require_channel_access
 from app.services.media_config import get_channel_dir, load_channel_config
+from app.services.scanner import get_library_revision
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
 
@@ -50,6 +51,43 @@ async def list_channels(
     stmt = stmt.where(Channel.id.in_(allowed))
     channels = session.exec(stmt).all()
     return [to_channel_read(c) for c in channels]
+
+
+@router.get("/catalog-events", summary="Subscribe to live library catalog changes")
+async def catalog_events(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Publish a lightweight revision whenever the filesystem catalog changes."""
+    bind = session.get_bind()
+    last_revision = get_library_revision(session)
+
+    async def event_stream():
+        nonlocal last_revision
+        yield "retry: 1000\n\n"
+        yield f"event: catalog-update\ndata: {last_revision}\n\n"
+        keep_alive = 0.0
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(0.5)
+            keep_alive += 0.5
+            with Session(bind) as live_session:
+                revision = get_library_revision(live_session)
+            if revision != last_revision:
+                last_revision = revision
+                yield f"event: catalog-update\ndata: {revision}\n\n"
+                keep_alive = 0.0
+            elif keep_alive >= 15.0:
+                yield ": keep-alive\n\n"
+                keep_alive = 0.0
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(
@@ -125,4 +163,3 @@ async def channel_events(
             "X-Accel-Buffering": "no",
         },
     )
-

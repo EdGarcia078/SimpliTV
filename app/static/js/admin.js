@@ -8,6 +8,9 @@
   let currentDashboardChannelId = null;
   let searchDebounceTimer = null;
   let activeChannelConfiguration = null;
+  let catalogEventSource = null;
+  let catalogRefreshInFlight = false;
+  let catalogRefreshQueued = false;
 
   // =========================================================
   // UTILIDADES
@@ -49,6 +52,17 @@
       hour: '2-digit',
       minute: '2-digit',
     });
+  }
+
+  function formatEpisodeDescriptor(item, compact = false) {
+    const episode = Number(item?.episode_number) || 0;
+    const hasSeason = item?.season_number !== null
+      && item?.season_number !== undefined
+      && Number(item.season_number) > 0;
+    if (!hasSeason) return compact ? `E${episode}` : `Episodio ${episode}`;
+    return compact
+      ? `T${Number(item.season_number)}E${episode}`
+      : `Temporada ${Number(item.season_number)}, Episodio ${episode}`;
   }
 
   function escapeHtml(value) {
@@ -191,6 +205,7 @@
       await restoreActiveOptimizationJob();
 
       await loadSelectedChannelState();
+      connectCatalogEvents();
     } catch (err) {
       console.error(
         'Error inicializando panel administrativo:',
@@ -551,7 +566,7 @@
         'dash-episode'
       ).textContent = ep.media_type === 'movie'
         ? `Película${ep.franchise && ep.media_title ? ` — ${ep.media_title}` : ''}`
-        : `Temporada ${ep.season_number}, Episodio ${ep.episode_number}${
+        : `${formatEpisodeDescriptor(ep)}${
             ep.episode_title ? ` — ${ep.episode_title}` : ''
           }`;
 
@@ -568,7 +583,7 @@
           'dash-next'
         ).textContent = next.media_type === 'movie'
           ? `${next.franchise ? `${next.franchise} — ` : ''}${next.media_title} (Película)`
-          : `${next.media_title} (T${next.season_number}E${next.episode_number})${
+          : `${next.media_title} (${formatEpisodeDescriptor(next, true)})${
               next.episode_title ? ` — ${next.episode_title}` : ''
             }`;
       } else {
@@ -1562,6 +1577,7 @@
     document.getElementById('config-series-channel-id').value = activeChannelConfiguration.channel_id;
     document.getElementById('config-series-relative-dir').value = item.relative_dir;
     document.getElementById('config-series-name').textContent = item.name;
+    document.getElementById('config-series-display-name').value = cfg.name || item.name;
     document.getElementById('config-series-meta').textContent = `${Number(item.episode_count || 0)} episodio(s) detectado(s)`;
     document.getElementById('config-series-episodes-per-airing').value = Number(cfg.episodes_per_airing || 1);
     document.getElementById('config-series-start-mode').value = cfg.start_episode?.mode || 'any';
@@ -1577,12 +1593,18 @@
       e.preventDefault();
       const channelId = Number(document.getElementById('config-series-channel-id').value);
       const relativeDir = document.getElementById('config-series-relative-dir').value;
+      const displayName = document.getElementById('config-series-display-name').value.trim();
       const episodesPerAiring = Number(document.getElementById('config-series-episodes-per-airing').value);
       const startMode = document.getElementById('config-series-start-mode').value;
       const playbackMode = document.getElementById('config-series-playback-mode').value;
       const selectionWeight = Number(document.getElementById('config-series-selection-weight').value);
       const submitButton = e.submitter;
       setPortableConfigError('config-series-error');
+
+      if (!displayName) {
+        setPortableConfigError('config-series-error', 'El nombre visible de la serie es obligatorio.');
+        return;
+      }
 
       if (!Number.isInteger(episodesPerAiring) || episodesPerAiring < 1 || episodesPerAiring > 100) {
         setPortableConfigError('config-series-error', 'Episodios por emisión debe estar entre 1 y 100.');
@@ -1607,6 +1629,7 @@
             relative_dir: relativeDir,
             config: {
               version: 1,
+              name: displayName,
               episodes_per_airing: episodesPerAiring,
               start_episode: { mode: startMode },
               playback: { mode: playbackMode },
@@ -3065,7 +3088,12 @@
 
   function libraryMediaItemLabel(item) {
     if (item.media_type === 'movie') return 'Película';
-    return `T${item.season_number} · E${item.episode_number}`;
+    const hasSeason = item.season_number !== null
+      && item.season_number !== undefined
+      && Number(item.season_number) > 0;
+    return hasSeason
+      ? `T${Number(item.season_number)} · E${item.episode_number}`
+      : `E${item.episode_number}`;
   }
 
   function libraryMetaLine(item) {
@@ -3167,29 +3195,38 @@
         .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
         .map(([seriesName, seasons]) => {
           const episodeCount = Array.from(seasons.values()).reduce((sum, eps) => sum + eps.length, 0);
+          const seasonCount = Array.from(seasons.keys()).filter((season) => season > 0).length;
           const seasonBlocks = Array.from(seasons.entries())
             .sort(([a], [b]) => a - b)
-            .map(([season, episodes]) => `
-              <details class="library-node library-season-node">
-                <summary>
-                  <span class="library-node-title"><span class="library-node-icon">📁</span>Temporada ${season || '—'}</span>
-                  <span class="library-node-count">${episodes.length} episodio${episodes.length === 1 ? '' : 's'}</span>
-                </summary>
-                <div class="library-node-body">
-                  ${episodes
-                    .slice()
-                    .sort((a, b) => Number(a.episode_number) - Number(b.episode_number))
-                    .map(libraryLeaf)
-                    .join('')}
-                </div>
-              </details>
-            `).join('');
+            .map(([season, episodes]) => {
+              const leaves = episodes
+                .slice()
+                .sort((a, b) => Number(a.episode_number) - Number(b.episode_number))
+                .map(libraryLeaf)
+                .join('');
+              if (season === 0) {
+                return `<div class="library-node-body">${leaves}</div>`;
+              }
+              return `
+                <details class="library-node library-season-node">
+                  <summary>
+                    <span class="library-node-title"><span class="library-node-icon">📁</span>Temporada ${season}</span>
+                    <span class="library-node-count">${episodes.length} episodio${episodes.length === 1 ? '' : 's'}</span>
+                  </summary>
+                  <div class="library-node-body">${leaves}</div>
+                </details>
+              `;
+            }).join('');
+
+          const seriesMeta = seasonCount > 0
+            ? `${seasonCount} temp. · ${episodeCount} ep.`
+            : `${episodeCount} ep.`;
 
           return `
             <details class="library-node library-series-node">
               <summary>
                 <span class="library-node-title"><span class="library-node-icon">📺</span>${escapeHtml(seriesName)}</span>
-                <span class="library-node-count">${seasons.size} temp. · ${episodeCount} ep.</span>
+                <span class="library-node-count">${seriesMeta}</span>
               </summary>
               <div class="library-node-body">${seasonBlocks}</div>
             </details>
@@ -3526,6 +3563,52 @@
     });
   }
 
+  async function refreshAdminCatalog() {
+    if (catalogRefreshInFlight) {
+      catalogRefreshQueued = true;
+      return;
+    }
+
+    catalogRefreshInFlight = true;
+    try {
+      do {
+        catalogRefreshQueued = false;
+        const configuredChannelId = Number(activeChannelConfiguration?.channel_id);
+        await loadChannels({ preserveSelection: true });
+
+        if (configuredChannelId && !channelsCache.some(
+          (channel) => Number(channel.id) === configuredChannelId
+        )) {
+          activeChannelConfiguration = null;
+          ['modal-config-channel', 'modal-config-series', 'modal-config-franchise']
+            .forEach((id) => document.getElementById(id)?.classList.add('hidden'));
+        }
+
+        const search = document.getElementById('library-search')?.value.trim() || '';
+        await Promise.all([
+          loadDashboardStats(),
+          loadLibrary(search),
+          loadGroups(),
+        ]);
+        await loadSelectedChannelState();
+      } while (catalogRefreshQueued);
+    } finally {
+      catalogRefreshInFlight = false;
+    }
+  }
+
+  function connectCatalogEvents() {
+    if (catalogEventSource) catalogEventSource.close();
+    if (typeof EventSource === 'undefined') return;
+
+    catalogEventSource = new EventSource('/api/channels/catalog-events');
+    catalogEventSource.addEventListener('catalog-update', refreshAdminCatalog);
+    catalogEventSource.onerror = () => {
+      // EventSource reconnects automatically and receives the latest revision.
+      console.warn('Flujo del catálogo desconectado; esperando reconexión.');
+    };
+  }
+
   // =========================================================
   // CERRAR SESIÓN
   // =========================================================
@@ -3540,6 +3623,7 @@
       'click',
       async () => {
         try {
+          if (catalogEventSource) catalogEventSource.close();
           await fetch(
             '/api/auth/logout',
             {

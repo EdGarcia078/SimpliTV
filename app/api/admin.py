@@ -50,6 +50,7 @@ from app.services.media_config import (
     save_franchise_config,
     save_series_config,
 )
+from app.services.scanner import bump_library_revision
 
 
 router = APIRouter(
@@ -136,11 +137,7 @@ def _relative_config_target(channel_dir, relative_dir: str, kind: str):
 
     parts = relative.parts
     if kind == "series":
-        valid = (
-            len(parts) == 2 and parts[0].casefold() == "series"
-        ) or (
-            len(parts) == 1 and parts[0].casefold() not in {"series", "movies"}
-        )
+        valid = len(parts) == 2 and parts[0].casefold() == "series"
     else:
         valid = len(parts) == 2 and parts[0].casefold() == "movies"
 
@@ -207,9 +204,6 @@ def _portable_channel_configuration(session: Session, channel: Channel) -> dict:
     series_dirs = []
     if canonical_series_root is not None:
         series_dirs.extend(p for p in canonical_series_root.iterdir() if p.is_dir())
-    series_dirs.extend(
-        p for p in children if p.name.casefold() not in {"series", "movies"}
-    )
 
     franchise_dirs = []
     if canonical_movies_root is not None:
@@ -223,10 +217,12 @@ def _portable_channel_configuration(session: Session, channel: Channel) -> dict:
             continue
         seen.add(resolved)
         rel = series_dir.relative_to(channel_dir).as_posix()
+        if series_counts.get(rel, 0) <= 0:
+            continue
         cfg = load_series_config(series_dir)
         series_payload.append({
             "relative_dir": rel,
-            "name": series_dir.name,
+            "name": cfg.name.strip() or series_dir.name,
             "episode_count": series_counts.get(rel, 0),
             "config": cfg.model_dump(mode="json"),
         })
@@ -234,6 +230,8 @@ def _portable_channel_configuration(session: Session, channel: Channel) -> dict:
     franchise_payload = []
     for franchise_dir in sorted(franchise_dirs, key=lambda path: path.name.casefold()):
         rel = franchise_dir.relative_to(channel_dir).as_posix()
+        if franchise_counts.get(rel, 0) <= 0:
+            continue
         cfg = load_franchise_config(franchise_dir)
         franchise_payload.append({
             "relative_dir": rel,
@@ -971,9 +969,15 @@ async def save_portable_channel_configuration(
         raise HTTPException(status_code=400, detail="El nombre del canal no puede estar vacío.")
     config.name = new_name
 
-    name_conflict = session.exec(
-        select(Channel).where(Channel.name == new_name, Channel.id != channel.id)
-    ).first()
+    name_conflict = next(
+        (
+            candidate
+            for candidate in session.exec(select(Channel)).all()
+            if candidate.id != channel.id
+            and candidate.name.casefold() == new_name.casefold()
+        ),
+        None,
+    )
     if name_conflict:
         raise HTTPException(status_code=409, detail="Ya existe otro canal con ese nombre.")
 
@@ -983,6 +987,9 @@ async def save_portable_channel_configuration(
         session.add(channel)
         session.commit()
         session.refresh(channel)
+
+    bump_library_revision(session)
+    session.commit()
 
     await channel_engine.refresh_channel_schedule(session, channel_id)
     return _portable_channel_configuration(session, channel)
@@ -1003,7 +1010,28 @@ async def save_portable_series_configuration(
         raise HTTPException(status_code=400, detail="Versión de configuración no compatible.")
 
     series_dir = _relative_config_target(channel_dir, payload.relative_dir, "series")
+    series_name = payload.config.name.strip()
+    if not series_name:
+        if "name" in payload.config.model_fields_set:
+            raise HTTPException(status_code=400, detail="El nombre de la serie no puede estar vacío.")
+        current_config = load_series_config(series_dir)
+        series_name = current_config.name.strip() or series_dir.name
+    payload.config.name = series_name
     save_series_config(series_dir, payload.config)
+    clean_relative = payload.relative_dir.strip().replace("\\", "/").rstrip("/")
+    prefix = f"{channel.folder_name or channel.name}/{clean_relative}/"
+    episodes = session.exec(
+        select(MediaItem).where(
+            MediaItem.channel_id == channel.id,
+            MediaItem.media_type == "episode",
+        )
+    ).all()
+    for episode in episodes:
+        if episode.relative_path.startswith(prefix):
+            episode.media_title = series_name
+            session.add(episode)
+    bump_library_revision(session)
+    session.commit()
     await channel_engine.refresh_channel_schedule(session, channel_id)
     return _portable_channel_configuration(session, channel)
 
@@ -1032,7 +1060,8 @@ async def save_portable_franchise_configuration(
 
     # Keep the searchable index/presentation in sync immediately; the YAML remains
     # the source of truth and a future scan will derive the same value again.
-    prefix = f"{channel.folder_name or channel.name}/{payload.relative_dir.strip().replace('\\', '/').rstrip('/')}/"
+    clean_relative = payload.relative_dir.strip().replace("\\", "/").rstrip("/")
+    prefix = f"{channel.folder_name or channel.name}/{clean_relative}/"
     movies = session.exec(
         select(MediaItem).where(
             MediaItem.channel_id == channel.id,
@@ -1047,6 +1076,9 @@ async def save_portable_franchise_configuration(
             changed = True
     if changed:
         session.commit()
+
+    bump_library_revision(session)
+    session.commit()
 
     await channel_engine.refresh_channel_schedule(session, channel_id)
     return _portable_channel_configuration(session, channel)
@@ -1091,6 +1123,7 @@ async def update_channel_settings(
     channel.loop = settings.loop
 
     session.add(channel)
+    bump_library_revision(session)
     session.commit()
     session.refresh(channel)
 

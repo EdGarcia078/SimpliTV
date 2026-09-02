@@ -407,6 +407,7 @@ class NormalizationManager:
             # are complete. This removes old paths and indexes the new .mp4 paths.
             with Session(engine) as session:
                 await scan_library(session)
+                await channel_engine.notify_library_changed(session)
             job.status = "completed"
         except asyncio.CancelledError:
             job.status = "cancelled"
@@ -415,6 +416,7 @@ class NormalizationManager:
             try:
                 with Session(engine) as session:
                     await scan_library(session)
+                    await channel_engine.notify_library_changed(session)
             except Exception as exc:
                 logger.warning("Could not rescan library after cancelling normalization: %s", exc)
             raise

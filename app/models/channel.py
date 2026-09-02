@@ -19,6 +19,14 @@ class Channel(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ChannelIdentityCounter(SQLModel, table=True):
+    """Durable allocator preventing a deleted channel ID from being reused."""
+    __tablename__ = "channel_identity_counter"
+
+    id: int = Field(default=1, primary_key=True)
+    next_id: int = Field(default=1, ge=1)
+
+
 class ChannelState(SQLModel, table=True):
     """Database model for persisting the global channel state across restarts."""
     __tablename__ = "channel_state"

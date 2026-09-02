@@ -37,11 +37,11 @@ def test_incompatible_video_requires_transcode():
     assert "H.264" in item.reason
 
 
-def test_text_subtitles_are_migrated_to_mov_text_without_video_transcode():
+def test_text_subtitles_are_discarded_without_video_transcode():
     item = classify_media(make_media(subtitle_codecs=["ass"]))
     assert item.status == "convert"
     assert item.strategy == "remux"
-    assert "mov_text" in item.reason
+    assert "subtítulos descartados" in item.reason
 
 
 def test_bitmap_subtitles_do_not_block_mkv_conversion():
@@ -51,7 +51,7 @@ def test_bitmap_subtitles_do_not_block_mkv_conversion():
     ))
     assert item.status == "convert"
     assert item.strategy == "remux"
-    assert "conservará el original" in item.reason.lower()
+    assert "subtítulos descartados" in item.reason.lower()
 
 
 def test_any_existing_mp4_is_ready_even_if_codecs_are_not_canonical():

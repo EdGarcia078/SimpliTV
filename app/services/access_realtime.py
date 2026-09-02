@@ -62,6 +62,10 @@ def build_user_access_snapshot(session: Session, user: User) -> dict:
     sensitive_channel_ids = sorted(
         channel.id for channel in relevant_channels if channel_is_sensitive(channel)
     )
+    channel_catalog = [
+        {"id": channel.id, "name": channel.name}
+        for channel in relevant_channels
+    ]
 
     return {
         "user_id": user.id,
@@ -72,6 +76,7 @@ def build_user_access_snapshot(session: Session, user: User) -> dict:
         "blocked_channel_ids": blocked_channel_ids,
         "sensitive_content_enabled": sensitive_content_enabled,
         "sensitive_channel_ids": sensitive_channel_ids,
+        "channel_catalog": channel_catalog,
         "visible_channel_ids": sorted(get_player_channel_ids(session, user)),
     }
 

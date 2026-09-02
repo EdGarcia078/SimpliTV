@@ -1,6 +1,6 @@
 """
 Dynamic library tests: scanner, watcher, ChannelEngine integration.
-All use the 4-level hierarchy: Channel/Show/Season/MediaItem.
+All use the canonical hierarchy: Channel/Series/Show[/Season]/MediaItem.
 """
 import asyncio
 import os
@@ -63,8 +63,7 @@ async def test_watcher_detects_new_file(test_db: Session, sample_media_dir: Path
     watcher.start()
 
     try:
-        # Must be under Channel/Show/Season hierarchy
-        new_file = sample_media_dir / "Canal 1" / "JoJo" / "Season 1" / "S01E03 - Silver Chariot.mp4"
+        new_file = sample_media_dir / "Canal 1" / "Series" / "JoJo" / "Season 1" / "S01E03 - Silver Chariot.mp4"
         create_dummy_video(new_file, duration=2)
 
         # Trigger watcher event queue and wait for debounce worker
@@ -95,7 +94,7 @@ def test_file_stability_check(test_temp_dir: Path):
 # 4. Múltiples eventos para el mismo archivo: no generan duplicados
 @pytest.mark.asyncio
 async def test_idempotent_multiple_events(test_db: Session, sample_media_dir: Path):
-    target = sample_media_dir / "Canal 1" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
+    target = sample_media_dir / "Canal 1" / "Series" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
     assert target.exists()
 
     # Process same file multiple times
@@ -115,7 +114,7 @@ async def test_idempotent_multiple_events(test_db: Session, sample_media_dir: Pa
 # 5. Modificar un archivo: sus metadatos se actualizan
 @pytest.mark.asyncio
 async def test_modify_file_updates_metadata(test_db: Session, sample_media_dir: Path):
-    target = sample_media_dir / "Canal 1" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
+    target = sample_media_dir / "Canal 1" / "Series" / "Bocchi the Rock" / "Season 1" / "S01E01.mp4"
     ep_before = await upsert_episode_file(test_db, target, sample_media_dir)
     assert ep_before is not None
 
@@ -133,7 +132,7 @@ async def test_delete_file_removes_from_candidates(test_db: Session, sample_medi
     await scan_library(test_db, sample_media_dir)
     channel = _get_first_channel(test_db)
 
-    target = sample_media_dir / "Canal 1" / "JoJo" / "Season 1" / "S01E02 - The Prophecy.mp4"
+    target = sample_media_dir / "Canal 1" / "Series" / "JoJo" / "Season 1" / "S01E02 - The Prophecy.mp4"
     ep = await upsert_episode_file(test_db, target, sample_media_dir)
     assert ep is not None
 
@@ -166,7 +165,7 @@ async def test_added_episode_becomes_candidate(test_db: Session, sample_media_di
     assert state_before is not None
 
     # Add a brand new show with play_count = 0 under Canal 1
-    frieren_file = sample_media_dir / "Canal 1" / "Frieren" / "Season 1" / "S01E01 - The Journey Begins.mp4"
+    frieren_file = sample_media_dir / "Canal 1" / "Series" / "Frieren" / "Season 1" / "S01E01 - The Journey Begins.mp4"
     create_dummy_video(frieren_file, duration=5)
     new_ep = await upsert_episode_file(test_db, frieren_file, sample_media_dir)
     assert new_ep is not None
@@ -194,7 +193,7 @@ async def test_broadcast_not_interrupted_by_new_files(test_db: Session, sample_m
     current_started_at = state1.started_at
 
     # Dynamically add another file under same channel
-    extra_file = sample_media_dir / "Canal 1" / "Chainsaw Man" / "Season 1" / "S01E01.mp4"
+    extra_file = sample_media_dir / "Canal 1" / "Series" / "Chainsaw Man" / "Season 1" / "S01E01.mp4"
     create_dummy_video(extra_file, duration=5)
     await upsert_episode_file(test_db, extra_file, sample_media_dir)
     await engine.notify_library_changed(test_db)
@@ -210,7 +209,7 @@ async def test_broadcast_not_interrupted_by_new_files(test_db: Session, sample_m
 @pytest.mark.asyncio
 async def test_restart_scan_detects_offline_changes(test_db: Session, sample_media_dir: Path):
     # Add file while "offline" under Canal 1
-    offline_file = sample_media_dir / "Canal 1" / "Spy x Family" / "Season 1" / "S01E01.mp4"
+    offline_file = sample_media_dir / "Canal 1" / "Series" / "Spy x Family" / "Season 1" / "S01E01.mp4"
     create_dummy_video(offline_file, duration=5)
 
     # Simulate startup scan
@@ -263,8 +262,7 @@ async def test_empty_library_safety(test_db: Session, test_temp_dir: Path):
 async def test_single_episode_library_safety(test_db: Session, test_temp_dir: Path):
     import uuid
     single_dir = test_temp_dir / f"single_media_{uuid.uuid4().hex}"
-    # Must be Channel/Show/Season/MediaItem
-    single_file = single_dir / "Canal Test" / "OnePiece" / "Season 1" / "S01E01.mp4"
+    single_file = single_dir / "Canal Test" / "Series" / "OnePiece" / "Season 1" / "S01E01.mp4"
     create_dummy_video(single_file, duration=10)
 
     result = await scan_library(test_db, single_dir)

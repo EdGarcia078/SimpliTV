@@ -3,8 +3,15 @@ from app.models.access import (
     AccessGroup, UserAccessGroup, GroupChannelAccess,
     AccessGroupCreate, AccessGroupUpdate, AccessGroupRead,
 )
-from app.models.media import MediaItem, MediaItemBase, MediaItemRead, ScanResult
-from app.models.channel import ChannelState, NowPlayingResponse
+from app.models.media import (
+    LibraryRevision,
+    MediaIdentityCounter,
+    MediaItem,
+    MediaItemBase,
+    MediaItemRead,
+    ScanResult,
+)
+from app.models.channel import ChannelIdentityCounter, ChannelState, NowPlayingResponse
 from app.models.preferences import UserPreference, UserBlockedChannel
 from app.models.user import (
     User,
@@ -21,6 +28,9 @@ __all__ = [
     "MediaItemBase",
     "MediaItemRead",
     "ScanResult",
+    "LibraryRevision",
+    "MediaIdentityCounter",
+    "ChannelIdentityCounter",
     "ChannelState",
     "NowPlayingResponse",
     "User",

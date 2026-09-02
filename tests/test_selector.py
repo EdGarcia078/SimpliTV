@@ -11,7 +11,7 @@ def test_select_empty_library(test_db: Session):
     selected = select_next_episode(test_db, ch.id)
     assert selected is None
 
-def test_select_episodes(test_db: Session):
+def test_select_episodes(test_db: Session, monkeypatch):
     ch = Channel(name="Default", batch_size=2, loop=True, start_mode="any")
     test_db.add(ch)
     test_db.commit()
@@ -42,6 +42,8 @@ def test_select_episodes(test_db: Session):
     )
     test_db.add_all([ep1, ep2, ep3, ep4])
     test_db.commit()
+
+    monkeypatch.setattr("app.services.selector.random.choice", lambda seq: seq[0])
 
     # First episode should be A1
     res = select_next_episode(test_db, ch.id)

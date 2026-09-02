@@ -33,11 +33,15 @@ Este proyecto está optimizado para ejecutarse eficientemente en hardware de rec
    └── Canal 1/
        ├── channel.yaml
        ├── Series/
-       │   └── JoJo/
+       │   ├── JoJo/
+       │   │   ├── series.yaml
+       │   │   └── Season 1/
+       │   │       ├── S01E01 - Dio the Invader.mp4
+       │   │       └── S01E02 - A Letter from the Past.mp4
+       │   └── Serie sin temporadas/
        │       ├── series.yaml
-       │       └── Season 1/
-       │           ├── S01E01 - Dio the Invader.mp4
-       │           └── S01E02 - A Letter from the Past.mp4
+       │       ├── E01 - Inicio.mp4
+       │       └── E02 - Final.mp4
        └── Movies/
            ├── Akira.mp4
            └── Harry Potter/
@@ -45,7 +49,9 @@ Este proyecto está optimizado para ejecutarse eficientemente en hardware de rec
                └── Harry Potter and the Philosopher's Stone.mp4
    ```
 
-   El escáner crea automáticamente `channel.yaml`, `Series/`, `Movies/`, `series.yaml` y `franchise.yaml` cuando falten. También se admite la jerarquía simplificada `media/<CANAL>/<SERIE>/<TEMPORADA>/<EPISODIO>` para bibliotecas existentes. Al actualizar desde una instalación antigua, la carpeta raíz `anime/` se migra automáticamente a `media/` cuando es posible.
+   El escáner crea automáticamente `channel.yaml`, `Series/`, `Movies/`, `series.yaml` y `franchise.yaml` cuando falten. Solo se indexa esta estructura canónica; el contenido colocado directamente como `media/<CANAL>/<SERIE>/...` se conserva en disco, pero se ignora. Los episodios directamente dentro de la carpeta de una serie se muestran como `Episodio N`, sin inventar una temporada. Al actualizar desde una instalación antigua, la carpeta raíz `anime/` se migra automáticamente a `media/` cuando es posible, pero su contenido debe reorganizarse con la estructura canónica.
+
+   SimpliTV vigila la biblioteca durante la ejecución. Una carpeta nueva bajo `media/` recibe inmediatamente su estructura y YAML, aunque el canal no aparece en SQLite ni en las listas hasta contener su primer vídeo válido. Al quedarse vacío, el canal se elimina del índice, de la emisión y de los permisos; si vuelve a recibir contenido se crea con un ID nuevo y sin heredar accesos. Los renombres dentro del mismo canal conservan identidad e historial cuando son inequívocos, mientras que los movimientos entre canales se tratan como eliminación y creación.
 
 ## Configuración portable de canales
 
@@ -57,6 +63,7 @@ Se crea automáticamente en cada serie con estos valores:
 
 ```yaml
 version: 1
+name: JoJo
 episodes_per_airing: 1
 start_episode:
   mode: any
@@ -65,6 +72,7 @@ playback:
 selection_weight: 1
 ```
 
+- `name`: nombre visible portable de la serie; no cambia al renombrar su carpeta.
 - `episodes_per_airing`: cantidad de episodios consecutivos cuando se selecciona la serie.
 - `start_episode.mode`: `any`, `odd` o `even`; limita el episodio inicial de un bloque aleatorio y el primer inicio de una serie secuencial sin historial.
 - `playback.mode: random`: cada nuevo bloque elige un episodio inicial según `start_episode`.
@@ -191,7 +199,7 @@ Los pesos son relativos y no tienen que sumar 100:
 
 ### Tolerancia a contenido eliminado
 
-Si una franja contiene una selección que ya no encuentra medios (por ejemplo, se borró una serie incluida), el selector registra un warning y relaja primero únicamente esa selección manteniendo el tipo `series`/`movies`. Si tampoco existe contenido del tipo permitido, utiliza otro contenido disponible para evitar dejar el canal sin señal.
+Las series y franquicias sin vídeos se ocultan de todas las listas, pero conservan su carpeta, YAML y referencias de programación. Esas referencias solo se eliminan cuando también desaparece la carpeta física. Si una selección temporalmente no encuentra medios, el selector relaja primero únicamente esa selección manteniendo el tipo `series`/`movies`; si tampoco existe contenido del tipo permitido, utiliza otro contenido disponible para evitar dejar un canal activo sin señal.
 
 ### Administración visual
 

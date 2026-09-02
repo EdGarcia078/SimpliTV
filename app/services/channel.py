@@ -10,7 +10,7 @@ from app.models.channel import Channel, ChannelState, NowPlayingResponse
 from app.models.media import MediaItem
 from app.api.media import to_media_item_read
 from app.services.selector import is_item_eligible_for_selection, select_next_episode
-from app.services.media_config import schedule_allows_item
+from app.services.media_config import get_series_relative_dir, schedule_allows_item
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,12 @@ def _same_series(left: MediaItem, right: MediaItem) -> bool:
     return (
         getattr(left, "media_type", "episode") == "episode"
         and getattr(right, "media_type", "episode") == "episode"
-        and left.media_title == right.media_title
+        and (
+            get_series_relative_dir(left.relative_path, left.media_type) or left.media_title
+        )
+        == (
+            get_series_relative_dir(right.relative_path, right.media_type) or right.media_title
+        )
     )
 
 
@@ -437,10 +442,43 @@ class ChannelEngine:
             
         now = datetime.now(timezone.utc)
         channels = session.exec(select(Channel)).all()
+        channel_ids = {channel.id for channel in channels}
+
+        # Retire deleted channels before touching active ones. Existing SSE
+        # subscribers receive one final revision and the catalog event makes
+        # clients choose another authorized channel immediately.
+        for channel_id in set(self._channels) - channel_ids:
+            pb = self._channels[channel_id]
+            async with pb._lock:
+                pb._current_episode_id = None
+                pb._next_episode_id = None
+                pb._started_at = None
+                pb._duration = 0.0
+                pb._consecutive_plays = 1
+                self._publish_channel_changed(pb)
+            self._channels.pop(channel_id, None)
 
         for channel in channels:
             pb = self._get_playback_state(channel.id) # type: ignore
             async with pb._lock:
+                current = (
+                    session.get(MediaItem, pb._current_episode_id)
+                    if pb._current_episode_id
+                    else None
+                )
+                if current is None or current.channel_id != channel.id:
+                    persisted = session.get(ChannelState, channel.id)
+                    if persisted is not None:
+                        session.delete(persisted)
+                        session.commit()
+                    pb._current_episode_id = None
+                    pb._next_episode_id = None
+                    pb._started_at = None
+                    pb._duration = 0.0
+                    pb._consecutive_plays = 1
+                    await self._start_fresh_broadcast(session, pb, channel, now)
+                    continue
+
                 await self._catch_up_locked(session, pb, now)
                 if not pb._current_episode_id:
                     await self._start_fresh_broadcast(session, pb, channel, now)

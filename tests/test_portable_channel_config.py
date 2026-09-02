@@ -172,7 +172,7 @@ async def test_channel_schedule_filters_series_and_movies(test_db, test_temp_dir
 
 
 @pytest.mark.asyncio
-async def test_legacy_hierarchy_is_preserved_and_gets_series_config(test_db, test_temp_dir, monkeypatch):
+async def test_legacy_hierarchy_is_ignored_but_never_moved(test_db, test_temp_dir, monkeypatch):
     root = test_temp_dir / "legacy_library"
     monkeypatch.setattr(settings, "MEDIA_DIR", root)
     legacy_file = root / "Canal Legacy" / "JoJo" / "Season 1" / "S01E01.mp4"
@@ -190,6 +190,8 @@ async def test_legacy_hierarchy_is_preserved_and_gets_series_config(test_db, tes
     await scan_library(test_db, root)
 
     assert legacy_file.exists(), "The scanner must never move legacy media automatically"
-    assert (root / "Canal Legacy" / "JoJo" / "series.yaml").exists()
+    assert not (root / "Canal Legacy" / "JoJo" / "series.yaml").exists()
     assert (root / "Canal Legacy" / "Series").is_dir()
     assert (root / "Canal Legacy" / "Movies").is_dir()
+    assert test_db.exec(select(Channel)).all() == []
+    assert test_db.exec(select(MediaItem)).all() == []

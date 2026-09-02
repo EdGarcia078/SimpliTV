@@ -1,7 +1,7 @@
 import logging
 from typing import Generator, Optional
 
-from sqlalchemy import inspect
+from sqlalchemy import event, inspect
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from app.core.config import settings
@@ -24,6 +24,16 @@ engine = create_engine(
 )
 
 
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    """Make relation cleanup guarantees effective for every SQLite connection."""
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 def create_db_and_tables() -> None:
     """Initialize database tables and apply lightweight compatible migrations."""
     _migrate_legacy_media_table()
@@ -32,6 +42,8 @@ def create_db_and_tables() -> None:
     _migrate_channel_folder_name()
     _migrate_episode_media_fields()
     _migrate_episode_title_field()
+    _migrate_media_file_mtime()
+    _repair_orphan_channel_relations()
     with Session(engine) as session:
         ensure_default_admin(session)
 
@@ -154,3 +166,45 @@ def _migrate_episode_title_field() -> None:
         connection.exec_driver_sql(
             "ALTER TABLE media_items RENAME COLUMN anime_title TO media_title"
         )
+
+
+def _migrate_media_file_mtime() -> None:
+    """Add a nanosecond mtime fingerprint without rebuilding existing databases."""
+    inspector = inspect(engine)
+    if "media_items" not in set(inspector.get_table_names()):
+        return
+    columns = {column["name"] for column in inspector.get_columns("media_items")}
+    if "file_mtime_ns" in columns:
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE media_items ADD COLUMN file_mtime_ns INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def _repair_orphan_channel_relations() -> None:
+    """Clean historical dangling channel/media references before normal use."""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        if {"channel_state", "channels", "media_items"} <= tables:
+            connection.exec_driver_sql(
+                "DELETE FROM channel_state "
+                "WHERE channel_id NOT IN (SELECT id FROM channels) "
+                "OR current_episode_id NOT IN (SELECT id FROM media_items)"
+            )
+            connection.exec_driver_sql(
+                "UPDATE channel_state SET next_episode_id = NULL "
+                "WHERE next_episode_id IS NOT NULL "
+                "AND next_episode_id NOT IN (SELECT id FROM media_items)"
+            )
+        if {"group_channel_access", "channels"} <= tables:
+            connection.exec_driver_sql(
+                "DELETE FROM group_channel_access "
+                "WHERE channel_id NOT IN (SELECT id FROM channels)"
+            )
+        if {"user_blocked_channels", "channels"} <= tables:
+            connection.exec_driver_sql(
+                "DELETE FROM user_blocked_channels "
+                "WHERE channel_id NOT IN (SELECT id FROM channels)"
+            )

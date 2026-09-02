@@ -588,6 +588,12 @@
         <input type="hidden" id="config-series-relative-dir" />
 
         <div class="form-group">
+          <label for="config-series-display-name">Nombre visible</label>
+          <input type="text" id="config-series-display-name" required maxlength="160" />
+          <small class="text-muted">Se guarda en series.yaml y no cambia al renombrar la carpeta.</small>
+        </div>
+
+        <div class="form-group">
           <label for="config-series-episodes-per-airing">Episodios por emisión</label>
           <input type="number" id="config-series-episodes-per-airing" required min="1" max="100" step="1" />
           <small class="text-muted">Una vez elegida la serie, reproduce esta cantidad de episodios consecutivos.</small>

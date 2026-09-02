@@ -352,7 +352,7 @@ def test_admin_persists_advanced_configuration_to_yaml(client, test_db, sample_m
     )
     assert save_series.status_code == 200, save_series.text
     series_yaml = __import__("yaml").safe_load(
-        (sample_media_dir / "Canal 1" / "JoJo" / "series.yaml").read_text(encoding="utf-8")
+        (sample_media_dir / "Canal 1" / "Series" / "JoJo" / "series.yaml").read_text(encoding="utf-8")
     )
     assert series_yaml["playback"]["mode"] == "sequential"
     assert series_yaml["selection_weight"] == 11

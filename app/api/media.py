@@ -19,7 +19,7 @@ def to_media_item_read(ep: MediaItem) -> MediaItemRead:
         id=ep.id,  # type: ignore
         channel_id=ep.channel_id,
         media_title=ep.media_title,
-        season_number=ep.season_number,
+        season_number=ep.season_number or None,
         episode_number=ep.episode_number,
         episode_title=ep.episode_title,
         media_type=ep.media_type,

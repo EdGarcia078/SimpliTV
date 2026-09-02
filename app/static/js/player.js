@@ -66,6 +66,7 @@
   let syncRequestedWhileFetching = false;
   let channelEventSource = null;
   let accessEventSource = null;
+  let catalogEventSource = null;
   let accessRefreshInFlight = false;
   let accessRefreshQueued = false;
   let actionFeedbackTimer = null;
@@ -156,7 +157,9 @@
 
     return {
       main: item?.media_title || '—',
-      detail: `T${item?.season_number ?? 1} • E${item?.episode_number ?? 0}`,
+      detail: item?.season_number == null || Number(item.season_number) <= 0
+        ? `Episodio ${item?.episode_number ?? 0}`
+        : `T${item.season_number} • E${item?.episode_number ?? 0}`,
       subtitle: item?.episode_title ? `— ${item.episode_title}` : ''
     };
   }
@@ -408,6 +411,10 @@
       }
 
       if (response.status === 404) {
+        currentMediaItemId = null;
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
         setEmptyStateMode('no-signal');
         emptyState.classList.remove('hidden');
         osdOverlay.classList.remove('hidden');
@@ -601,6 +608,7 @@
     source.addEventListener('session-invalid', () => {
       source.close();
       if (channelEventSource) channelEventSource.close();
+      if (catalogEventSource) catalogEventSource.close();
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -612,6 +620,20 @@
       // revision immediately after every reconnect, so missed permission changes
       // are recovered without waiting for the 30-second playback health check.
       console.warn('Account access event stream disconnected; waiting for reconnect.');
+    };
+  }
+
+  function connectCatalogEvents() {
+    if (catalogEventSource) catalogEventSource.close();
+    if (typeof EventSource === 'undefined') return;
+
+    catalogEventSource = new EventSource('/api/channels/catalog-events');
+    catalogEventSource.addEventListener('catalog-update', () => {
+      handleRealtimeAccessUpdate();
+    });
+    catalogEventSource.onerror = () => {
+      // Reconnection is automatic and starts with the current revision.
+      console.warn('Library catalog event stream disconnected; waiting for reconnect.');
     };
   }
 
@@ -1207,6 +1229,7 @@ window.addEventListener('keydown', (e) => {
         osdOverlay.classList.remove('hidden');
       }
       connectAccessEvents();
+      connectCatalogEvents();
     }
   });
 })();
