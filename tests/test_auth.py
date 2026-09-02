@@ -95,6 +95,38 @@ def test_expired_session(test_db: Session, sample_media_dir, normal_user):
     app.dependency_overrides.clear()
 
 
+def test_returning_user_session_is_renewed_for_another_seven_days(
+    auth_client,
+    test_db: Session,
+):
+    token = auth_client.cookies.get(SESSION_COOKIE_NAME)
+    active_session = test_db.exec(
+        select(UserSession).where(UserSession.session_token == token)
+    ).one()
+    previous_expiry = datetime.now(timezone.utc) + timedelta(hours=12)
+    active_session.expires_at = previous_expiry
+    test_db.add(active_session)
+    test_db.commit()
+
+    before_request = datetime.now(timezone.utc)
+    response = auth_client.get("/api/auth/me")
+    after_request = datetime.now(timezone.utc)
+
+    assert response.status_code == 200
+    assert f"Max-Age={7 * 86400}" in response.headers["set-cookie"]
+
+    renewed_session = test_db.exec(
+        select(UserSession).where(UserSession.session_token == token)
+    ).one()
+    renewed_expiry = renewed_session.expires_at
+    if renewed_expiry.tzinfo is None:
+        renewed_expiry = renewed_expiry.replace(tzinfo=timezone.utc)
+
+    assert renewed_expiry > previous_expiry
+    assert before_request + timedelta(days=7) <= renewed_expiry
+    assert renewed_expiry <= after_request + timedelta(days=7)
+
+
 def test_deactivated_user_cannot_authenticate(unauth_client, test_db: Session, normal_user):
     normal_user.is_active = False
     test_db.add(normal_user)

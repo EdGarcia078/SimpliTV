@@ -47,6 +47,19 @@ class ViewerPreferencesUpdateRequest(BaseModel):
     sensitive_content_enabled: Optional[bool] = None
 
 
+def _set_session_cookie(response: Response, token: str) -> None:
+    """Set the browser cookie for a fresh seven-day session window."""
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_EXPIRE_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        path="/",
+    )
+
+
 def _require_current_password(user: User, password: str) -> None:
     if not verify_password(password, user.password_hash):
         raise HTTPException(
@@ -123,15 +136,7 @@ def login(
     session.refresh(user)
 
     # Set secure HttpOnly session cookie
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        max_age=SESSION_EXPIRE_DAYS * 86400,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        path="/",
-    )
+    _set_session_cookie(response, token)
 
     return UserRead(
         id=user.id,  # type: ignore
@@ -170,8 +175,27 @@ def logout(
 
 
 @router.get("/me", response_model=UserRead, summary="Get Current User")
-def get_me(current_user: User = Depends(get_current_user)) -> UserRead:
-    """Return the profile of the currently authenticated user."""
+def get_me(
+    response: Response,
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> UserRead:
+    """Return the current user and renew cookie sessions for another seven days."""
+    if session_cookie:
+        active_session = session.exec(
+            select(UserSession).where(
+                UserSession.session_token == session_cookie,
+                UserSession.user_id == current_user.id,
+                UserSession.expires_at > datetime.now(timezone.utc),
+            )
+        ).first()
+        if active_session is not None:
+            active_session.expires_at = get_session_expiry()
+            session.add(active_session)
+            session.commit()
+            _set_session_cookie(response, session_cookie)
+
     return UserRead(
         id=current_user.id,  # type: ignore
         username=current_user.username,
@@ -351,4 +375,3 @@ def update_viewer_preferences(
 
     session.commit()
     return _viewer_preferences_payload(session, current_user)
-
