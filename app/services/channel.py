@@ -14,6 +14,12 @@ from app.services.media_config import schedule_allows_item
 
 logger = logging.getLogger(__name__)
 
+# Prevent corrupt one-second metadata or a wildly incorrect system clock from
+# monopolizing a request forever. Normal films/episodes cover days or months of
+# inactivity with only a small fraction of this limit. If reached, the next
+# request continues from the safely persisted checkpoint instead of resetting.
+MAX_CATCH_UP_TRANSITIONS = 10_000
+
 
 def _same_series(left: MediaItem, right: MediaItem) -> bool:
     return (
@@ -126,35 +132,42 @@ class ChannelEngine:
                             elapsed = (now - started_at).total_seconds()
                             duration = max(1.0, current_ep.duration or state.duration)
 
-                            if elapsed < duration:
+                            pb._current_episode_id = current_ep.id
+                            pb._consecutive_plays = state.consecutive_plays
+                            pb._started_at = started_at
+                            pb._duration = duration
+                            # Recalculate the reservation on startup using the
+                            # currently installed selector/configuration before
+                            # restoring any unattended transitions.
+                            next_ep = select_next_episode(
+                                session,
+                                channel.id,
+                                pb._current_episode_id,
+                                pb._consecutive_plays,
+                                at_time=started_at + timedelta(seconds=duration),
+                            )
+                            pb._next_episode_id = next_ep.id if next_ep else None
+                            state.next_episode_id = pb._next_episode_id
+                            state.updated_at = now
+                            session.add(state)
+
+                            if elapsed >= duration:
+                                transitions = await self._catch_up_locked(session, pb, now)
+                                logger.info(
+                                    "Restored %s unattended transition(s) on channel '%s'.",
+                                    transitions,
+                                    channel.name,
+                                )
+                            else:
+                                session.commit()
                                 logger.info(
                                     f"Resuming broadcast on channel '{channel.name}': "
-                                    f"'{current_ep.media_title}' (elapsed {elapsed:.1f}s / {duration:.1f}s)"
+                                    f"'{current_ep.media_title}' "
+                                    f"(elapsed {elapsed:.1f}s / {duration:.1f}s)"
                                 )
-                                pb._current_episode_id = current_ep.id
-                                pb._consecutive_plays = state.consecutive_plays
-                                pb._started_at = started_at
-                                pb._duration = duration
-                                # IMPORTANT: never trust a next_episode_id persisted by an
-                                # older selector implementation. Recalculate it on every
-                                # backend start using the selector that is currently installed.
-                                # This prevents a previously deterministic 1,2,3,4... schedule
-                                # from surviving after switching back to random playback.
-                                next_ep = select_next_episode(
-                                    session,
-                                    channel.id,
-                                    pb._current_episode_id,
-                                    pb._consecutive_plays,
-                                    at_time=started_at + timedelta(seconds=duration),
-                                )
-                                pb._next_episode_id = next_ep.id if next_ep else None
-                                state.next_episode_id = pb._next_episode_id
-                                state.updated_at = now
-                                session.add(state)
-                                session.commit()
-                                continue
+                            continue
                                 
-                    # No state or expired -> start fresh
+                    # No usable persisted state -> start a new timeline.
                     await self._start_fresh_broadcast(session, pb, channel, now)
 
             self._initialized = True
@@ -217,9 +230,21 @@ class ChannelEngine:
             f"{_media_label(first_ep)} (Duration: {pb._duration:.1f}s)"
         )
 
-    async def _advance_episode_locked(self, session: Session, pb: PlaybackState, now: datetime) -> None:
+    async def _advance_episode_locked(
+        self,
+        session: Session,
+        pb: PlaybackState,
+        transition_at: datetime,
+        *,
+        persist: bool = True,
+        publish: bool = True,
+    ) -> None:
         """
         Internal transition to the next episode for a specific channel, protected by its lock.
+
+        ``transition_at`` is the wall-clock boundary at which the new item began.
+        Natural catch-up passes the original scheduled boundary; an explicit
+        administrator skip passes the current time.
         """
         channel = session.get(Channel, pb.channel_id)
         if not channel:
@@ -245,7 +270,7 @@ class ChannelEngine:
                 session,
                 channel,
                 candidate,
-                at_time=now,
+                at_time=transition_at,
             )
         )
         if not reservation_valid:
@@ -260,7 +285,7 @@ class ChannelEngine:
                 pb.channel_id,
                 pb._current_episode_id,
                 pb._consecutive_plays,
-                at_time=now,
+                at_time=transition_at,
             )
 
         if not candidate:
@@ -270,6 +295,13 @@ class ChannelEngine:
             pb._started_at = None
             pb._duration = 0.0
             pb._next_episode_id = None
+            state = session.get(ChannelState, pb.channel_id)
+            if state:
+                session.delete(state)
+            if persist:
+                session.commit()
+            if publish:
+                self._publish_channel_changed(pb)
             return
 
         # Check consecutive plays
@@ -280,11 +312,11 @@ class ChannelEngine:
             pb._consecutive_plays = 1
 
         pb._current_episode_id = candidate.id
-        pb._started_at = now
+        pb._started_at = transition_at
         pb._duration = max(1.0, candidate.duration)
 
         candidate.play_count += 1
-        candidate.last_played_at = now
+        candidate.last_played_at = transition_at
         session.add(candidate)
 
         future_ep = select_next_episode(
@@ -292,7 +324,7 @@ class ChannelEngine:
             pb.channel_id,
             candidate.id,
             pb._consecutive_plays,
-            at_time=now + timedelta(seconds=pb._duration),
+            at_time=transition_at + timedelta(seconds=pb._duration),
         )
         pb._next_episode_id = future_ep.id if future_ep else None
 
@@ -303,26 +335,97 @@ class ChannelEngine:
                 current_episode_id=candidate.id, # type: ignore
                 consecutive_plays=pb._consecutive_plays,
                 next_episode_id=pb._next_episode_id,
-                started_at=now,
+                started_at=transition_at,
                 duration=pb._duration,
-                updated_at=now,
+                updated_at=transition_at,
             )
         else:
             state.current_episode_id = candidate.id # type: ignore
             state.consecutive_plays = pb._consecutive_plays
             state.next_episode_id = pb._next_episode_id
-            state.started_at = now
+            state.started_at = transition_at
             state.duration = pb._duration
-            state.updated_at = now
+            state.updated_at = transition_at
 
         session.add(state)
-        session.commit()
-        self._publish_channel_changed(pb)
+        if persist:
+            session.commit()
+        if publish:
+            self._publish_channel_changed(pb)
 
-        logger.info(
+        log_transition = logger.info if persist or publish else logger.debug
+        log_transition(
             f"Advanced broadcast on channel '{channel.name}' to: "
             f"{_media_label(candidate)} (Duration: {pb._duration:.1f}s)"
         )
+
+    async def _catch_up_locked(
+        self,
+        session: Session,
+        pb: PlaybackState,
+        target_time: datetime,
+    ) -> int:
+        """Advance every elapsed boundary while preserving wall-clock progress.
+
+        ChannelEngine remains event-driven: no background timer is required when
+        nobody is watching. On the next relevant event/request, this method
+        reconstructs the unattended timeline from persisted start times and
+        durations, then commits and publishes only the final visible state.
+        """
+        transitions = 0
+
+        while pb._current_episode_id and pb._started_at:
+            started_at = pb._started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+                pb._started_at = started_at
+
+            duration = max(1.0, pb._duration)
+            transition_at = started_at + timedelta(seconds=duration)
+            if target_time < transition_at:
+                break
+
+            await self._advance_episode_locked(
+                session,
+                pb,
+                transition_at,
+                persist=False,
+                publish=False,
+            )
+            transitions += 1
+
+            if transitions >= MAX_CATCH_UP_TRANSITIONS:
+                logger.error(
+                    "Catch-up limit reached for channel ID %s; remaining elapsed "
+                    "boundaries will continue on the next request.",
+                    pb.channel_id,
+                )
+                break
+
+            # A missing/invalid next item can end a non-looping channel.
+            if not pb._current_episode_id or not pb._started_at:
+                break
+
+            advanced_at = pb._started_at
+            if advanced_at.tzinfo is None:
+                advanced_at = advanced_at.replace(tzinfo=timezone.utc)
+            if advanced_at <= started_at:
+                logger.error(
+                    "Channel ID %s did not advance its timeline; aborting catch-up.",
+                    pb.channel_id,
+                )
+                break
+
+        if transitions:
+            session.commit()
+            self._publish_channel_changed(pb)
+            logger.info(
+                "Caught up channel ID %s through %s unattended transition(s).",
+                pb.channel_id,
+                transitions,
+            )
+
+        return transitions
 
     async def notify_library_changed(self, session: Session) -> None:
         """
@@ -338,6 +441,7 @@ class ChannelEngine:
         for channel in channels:
             pb = self._get_playback_state(channel.id) # type: ignore
             async with pb._lock:
+                await self._catch_up_locked(session, pb, now)
                 if not pb._current_episode_id:
                     await self._start_fresh_broadcast(session, pb, channel, now)
                     continue
@@ -399,6 +503,7 @@ class ChannelEngine:
         now = datetime.now(timezone.utc)
 
         async with pb._lock:
+            await self._catch_up_locked(session, pb, now)
             if not pb._current_episode_id:
                 pb._next_episode_id = None
                 return
@@ -474,13 +579,10 @@ class ChannelEngine:
 
         if elapsed >= pb._duration:
             async with pb._lock:
-                recheck_started = pb._started_at
-                if recheck_started and recheck_started.tzinfo is None:
-                    recheck_started = recheck_started.replace(tzinfo=timezone.utc)
-                if recheck_started:
-                    recheck_elapsed = (now - recheck_started).total_seconds()
-                    if recheck_elapsed >= pb._duration:
-                        await self._advance_episode_locked(session, pb, now)
+                await self._catch_up_locked(session, pb, now)
+
+        if not pb._current_episode_id:
+            return None
 
         current_ep = session.get(MediaItem, pb._current_episode_id)
         if not current_ep:
@@ -590,6 +692,7 @@ class ChannelEngine:
         pb = self._get_playback_state(channel_id)
         now = datetime.now(timezone.utc)
         async with pb._lock:
+            await self._catch_up_locked(session, pb, now)
             await self._advance_episode_locked(session, pb, now)
 
 

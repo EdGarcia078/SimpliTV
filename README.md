@@ -224,6 +224,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **Documentación de la API (Swagger UI)**: `http://localhost:8000/docs`
 - **Documentación alternativa (ReDoc)**: `http://localhost:8000/redoc`
 
+### Actualización desde el panel administrativo
+
+El encabezado del panel comprueba periódicamente si la rama local `main` está
+por detrás de `origin/main`. Cuando existe un avance directo disponible, se
+activa **Actualizar sistema**. Al confirmarlo, SimpliTV ejecuta
+`git pull --ff-only origin main`, responde al navegador y vuelve a ejecutar el
+mismo proceso de Python para cargar completamente el código nuevo.
+
+La actualización automática se cancela sin modificar archivos cuando la rama
+ha divergido o hay cambios locales rastreados. Los archivos ignorados por Git,
+como `.env`, `simplitv.db` y el contenido de `media/`, no bloquean el proceso.
+El remoto `origin` debe estar configurado y disponer de acceso no interactivo
+si el repositorio es privado.
+
 ---
 
 ## 🎮 Controles del Reproductor Web

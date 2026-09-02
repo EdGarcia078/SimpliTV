@@ -181,6 +181,7 @@
         loadUsers(),
         loadLibrary(),
         loadOptimizationProfile(),
+        loadSystemUpdateStatus(),
       ]);
       await loadGroups();
 
@@ -199,6 +200,138 @@
       window.location.href = '/login?next=/admin';
     }
   }
+
+  // =========================================================
+  // ACTUALIZACIÓN DEL SISTEMA
+  // =========================================================
+
+  const systemUpdateButton = document.getElementById('btn-system-update');
+  const systemUpdateLabel = document.getElementById('system-update-label');
+
+  function setSystemUpdateButton({
+    label,
+    title,
+    enabled = false,
+    checking = false,
+    restarting = false,
+  }) {
+    if (!systemUpdateButton || !systemUpdateLabel) return;
+
+    systemUpdateLabel.textContent = label;
+    systemUpdateButton.title = title || label;
+    systemUpdateButton.disabled = !enabled;
+    systemUpdateButton.classList.toggle('update-available', enabled);
+    systemUpdateButton.classList.toggle('checking', checking);
+    systemUpdateButton.classList.toggle('restarting', restarting);
+  }
+
+  async function loadSystemUpdateStatus() {
+    if (!systemUpdateButton) return;
+
+    setSystemUpdateButton({
+      label: 'Comprobando...',
+      title: 'Consultando origin/main.',
+      checking: true,
+    });
+
+    try {
+      const res = await fetch('/api/admin/system/update', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (handleAuthFailure(res)) return;
+
+      const data = await readResponseData(res);
+      if (!res.ok) {
+        throw new Error(getErrorMessage(data, 'No se pudo comprobar la actualización.'));
+      }
+
+      if (data.can_update) {
+        setSystemUpdateButton({
+          label: 'Actualizar sistema',
+          title: data.message,
+          enabled: true,
+        });
+        return;
+      }
+
+      const labels = {
+        up_to_date: 'Sistema actualizado',
+        local_ahead: 'Copia local adelantada',
+        local_changes: data.update_available ? 'Cambios locales' : 'Sistema actualizado',
+        diverged: 'Revisión manual necesaria',
+      };
+      setSystemUpdateButton({
+        label: labels[data.state] || 'Actualización no disponible',
+        title: data.message,
+      });
+    } catch (err) {
+      console.error('Error comprobando actualizaciones:', err);
+      setSystemUpdateButton({
+        label: 'No se pudo comprobar',
+        title: err.message || 'No se pudo contactar con origin/main.',
+      });
+    }
+  }
+
+  async function waitForSystemRestart() {
+    await new Promise((resolve) => window.setTimeout(resolve, 2500));
+
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`/api/health?restart=${Date.now()}`, {
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          window.location.reload();
+          return;
+        }
+      } catch {
+        // A connection failure is expected while the process is restarting.
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+
+    setSystemUpdateButton({
+      label: 'Recarga la página',
+      title: 'El reinicio está tardando más de lo esperado. Recarga la página manualmente.',
+    });
+  }
+
+  systemUpdateButton?.addEventListener('click', async () => {
+    if (!confirm('¿Actualizar desde origin/main y reiniciar SimpliTV ahora?')) return;
+
+    setSystemUpdateButton({
+      label: 'Actualizando...',
+      title: 'Aplicando git pull --ff-only origin main.',
+      restarting: true,
+    });
+
+    try {
+      const res = await fetch('/api/admin/system/update', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (handleAuthFailure(res)) return;
+
+      const data = await readResponseData(res);
+      if (!res.ok) {
+        throw new Error(getErrorMessage(data, 'No se pudo actualizar el sistema.'));
+      }
+
+      setSystemUpdateButton({
+        label: 'Reiniciando...',
+        title: data.message || 'Actualización aplicada. Reiniciando SimpliTV.',
+        restarting: true,
+      });
+      await waitForSystemRestart();
+    } catch (err) {
+      alert(err.message || 'No se pudo actualizar el sistema.');
+      await loadSystemUpdateStatus();
+    }
+  });
 
   // =========================================================
   // NAVEGACIÓN POR PESTAÑAS
@@ -3428,4 +3561,11 @@
   // =========================================================
 
   initAuth();
+
+  // Keep the indicator current when the administration panel remains open.
+  window.setInterval(() => {
+    if (!systemUpdateButton?.classList.contains('restarting')) {
+      loadSystemUpdateStatus();
+    }
+  }, 5 * 60 * 1000);
 })();

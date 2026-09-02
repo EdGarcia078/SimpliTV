@@ -19,6 +19,16 @@
       </div>
 
       <div class="admin-user-nav">
+        <button
+          id="btn-system-update"
+          class="btn-outline system-update-button"
+          type="button"
+          title="Comprobando el estado de origin/main..."
+          disabled
+        >
+          <span class="system-update-icon" aria-hidden="true">↻</span>
+          <span id="system-update-label">Comprobando...</span>
+        </button>
         <a href="/" class="btn-secondary" title="Ver la emisión en directo">📺 Ver TV</a>
         <span id="current-username" class="user-badge">Admin</span>
         <button id="btn-admin-logout" class="btn-outline" type="button">Cerrar Sesión</button>

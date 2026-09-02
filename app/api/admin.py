@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -31,6 +32,7 @@ from app.services.access import (
 )
 from app.services.optimization import OptimizationProfile, optimization_manager
 from app.services.normalization import normalization_manager
+from app.services.system_update import SystemUpdateError, system_update_manager
 from app.services.media_config import (
     CHANNEL_CONFIG_FILENAME,
     CONFIG_VERSION,
@@ -55,6 +57,34 @@ router = APIRouter(
     tags=["Admin"],
     dependencies=[Depends(get_current_admin)],
 )
+
+
+# ==========================================================
+# ACTUALIZACIÓN DEL SISTEMA
+# ==========================================================
+
+@router.get("/system/update", summary="Check System Update")
+async def get_system_update_status():
+    """Fetch origin/main and report whether this clean main checkout is behind."""
+    try:
+        return await asyncio.to_thread(system_update_manager.get_status, fetch=True)
+    except SystemUpdateError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+
+
+@router.post(
+    "/system/update",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Update and Restart System",
+)
+async def update_and_restart_system():
+    """Fast-forward from origin/main, then restart after returning the response."""
+    try:
+        result = await asyncio.to_thread(system_update_manager.apply_update)
+        system_update_manager.schedule_restart()
+        return result
+    except SystemUpdateError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 
 
 # ==========================================================
