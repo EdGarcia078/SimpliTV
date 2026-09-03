@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +15,11 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.db.session import engine
 from app.services.channel import channel_engine
+from app.services.media_processing import (
+    ProcessingFileState,
+    ProcessingPriorityProfile,
+    media_processing_priority_manager,
+)
 from app.services.scanner import scan_library
 
 logger = logging.getLogger(__name__)
@@ -87,6 +92,9 @@ class NormalizationJob:
     error: Optional[str] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
+    started_priority: str = "low"
+    current_priority: Optional[str] = None
+    files: list[ProcessingFileState] = field(default_factory=list, repr=False)
 
     @property
     def progress(self) -> float:
@@ -94,9 +102,37 @@ class NormalizationJob:
             return 100.0 if self.status == "completed" else 0.0
         return round((self.processed / self.total) * 100, 2)
 
+    @property
+    def elapsed_seconds(self) -> float:
+        if self.started_at is None:
+            return 0.0
+        end = self.finished_at if self.finished_at is not None else time.time()
+        return round(max(0.0, end - self.started_at), 3)
+
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["progress"] = self.progress
+        return {
+            "id": self.id,
+            "status": self.status,
+            "total": self.total,
+            "processed": self.processed,
+            "converted": self.converted,
+            "remuxed": self.remuxed,
+            "transcoded": self.transcoded,
+            "skipped": self.skipped,
+            "errors": self.errors,
+            "current_file": self.current_file,
+            "error": self.error,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "started_priority": self.started_priority,
+            "current_priority": self.current_priority,
+            "progress": self.progress,
+            "elapsed_seconds": self.elapsed_seconds,
+        }
+
+    def details_dict(self) -> dict[str, Any]:
+        data = self.to_dict()
+        data["files"] = [item.to_dict() for item in self.files]
         return data
 
 
@@ -266,6 +302,17 @@ class NormalizationManager:
     def get_active_job(self) -> Optional[NormalizationJob]:
         return next((j for j in self._jobs.values() if j.status in {"queued", "running"}), None)
 
+    def _prune_finished_jobs(self, keep: int = 3) -> None:
+        finished = sorted(
+            (job for job in self._jobs.values() if job.status not in {"queued", "running"}),
+            key=lambda job: job.id,
+            reverse=True,
+        )
+        for old_job in finished[max(0, keep):]:
+            self._jobs.pop(old_job.id, None)
+            self._tasks.pop(old_job.id, None)
+            self._processes.pop(old_job.id, None)
+
     def _media_files(self, root: Path) -> list[Path]:
         if not root.exists():
             return []
@@ -325,11 +372,23 @@ class NormalizationManager:
         async with self._lock:
             if self.get_active_job() is not None:
                 raise RuntimeError("Ya hay una conversión a MP4 en ejecución.")
+            self._prune_finished_jobs()
             analysis = self._latest_analysis or await self.analyze()
             candidates = [i for i in analysis.items if i.status == "convert"]
             if candidates and shutil.which("ffmpeg") is None:
                 raise RuntimeError("FFmpeg no está instalado o no está disponible en PATH.")
-            job = NormalizationJob(id=self._next_job_id, total=len(candidates))
+            job = NormalizationJob(
+                id=self._next_job_id,
+                total=len(candidates),
+                started_priority=media_processing_priority_manager.priority,
+                files=[
+                    ProcessingFileState(
+                        relative_path=item.relative_path,
+                        action=item.strategy or "convert",
+                    )
+                    for item in candidates
+                ],
+            )
             self._next_job_id += 1
             self._jobs[job.id] = job
             self._tasks[job.id] = asyncio.create_task(self._run_job(job, candidates))
@@ -380,27 +439,54 @@ class NormalizationManager:
         return job
 
     async def _run_job(self, job: NormalizationJob, candidates: list[NormalizationItem]) -> None:
+        if len(job.files) != len(candidates):
+            job.files = [
+                ProcessingFileState(
+                    relative_path=item.relative_path,
+                    action=item.strategy or "convert",
+                )
+                for item in candidates
+            ]
         job.status = "running"
         job.started_at = time.time()
         try:
-            for item in candidates:
+            for item, file_state in zip(candidates, job.files):
                 job.current_file = item.relative_path
+                file_state.status = "processing"
+                file_state.started_at = time.time()
                 try:
-                    result = await self._convert_one(Path(item.path), job.id)
+                    processing_profile = media_processing_priority_manager.profile
+                    job.current_priority = processing_profile.key
+                    file_state.priority = processing_profile.key
+                    result = await self._convert_one(
+                        Path(item.path), job.id, processing_profile
+                    )
                     if result == "remux":
                         job.converted += 1
                         job.remuxed += 1
+                        file_state.status = "completed"
+                        file_state.result = "Remux completado"
                     elif result == "transcode":
                         job.converted += 1
                         job.transcoded += 1
+                        file_state.status = "completed"
+                        file_state.result = "Transcodificación completada"
                     else:
                         job.skipped += 1
+                        file_state.status = "skipped"
+                        file_state.result = "Omitido al volver a comprobar el archivo"
                 except asyncio.CancelledError:
+                    file_state.status = "cancelled"
+                    file_state.result = "Procesamiento cancelado"
                     raise
                 except Exception as exc:
                     job.errors += 1
+                    file_state.status = "error"
+                    file_state.error = str(exc)
+                    file_state.result = "Error"
                     logger.exception("MP4 normalization failed for %s: %s", item.path, exc)
                 finally:
+                    file_state.finished_at = time.time()
                     job.processed += 1
 
             # Rebuild the filesystem-backed index only after all atomic replacements
@@ -430,11 +516,17 @@ class NormalizationManager:
             self._latest_analysis = None
             self._processes.pop(job.id, None)
 
-    async def _convert_one(self, path: Path, job_id: int) -> str:
+    async def _convert_one(
+        self,
+        path: Path,
+        job_id: int,
+        processing_profile: Optional[ProcessingPriorityProfile] = None,
+    ) -> str:
         if not path.is_file() or is_normalization_temp_file(path):
             return "skipped"
 
         root = settings.resolved_media_dir.resolve()
+        processing_profile = processing_profile or media_processing_priority_manager.profile
         media = await probe_streams(path, root)
         decision = classify_media(media, protected=path.resolve() in self._protected_paths())
         if decision.status != "convert" or decision.strategy not in {"remux", "transcode"}:
@@ -462,24 +554,28 @@ class NormalizationManager:
             video_codec = "copy" if (media.video_codec or "").lower() in MP4_VIDEO_COPY_CODECS else "libx264"
             audio_codec = "copy" if all(c in MP4_AUDIO_COPY_CODECS for c in media.audio_codecs) else "aac"
 
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            ffmpeg_args = [
+                "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                 "-i", str(path),
                 "-map", "0:v:0", "-map", "0:a?",
             ]
             # SimpliTV only needs video/audio for linear playback. Subtitle
             # streams are intentionally not mapped, regardless of their format.
-            cmd += ["-c:v", video_codec]
+            ffmpeg_args += ["-c:v", video_codec]
             if video_codec != "copy":
-                cmd += ["-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
-            cmd += ["-c:a", audio_codec]
+                ffmpeg_args += ["-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
+                ffmpeg_args += media_processing_priority_manager.encoder_thread_args(processing_profile)
+            ffmpeg_args += ["-c:a", audio_codec]
             if audio_codec != "copy":
-                cmd += ["-b:a", "192k"]
-            cmd += [
+                ffmpeg_args += ["-b:a", "192k"]
+            ffmpeg_args += [
                 "-map_metadata", "0",
                 "-movflags", "+faststart",
                 str(temp),
             ]
+            cmd = media_processing_priority_manager.build_ffmpeg_command(
+                ffmpeg_args, processing_profile
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

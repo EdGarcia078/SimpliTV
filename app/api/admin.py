@@ -32,6 +32,7 @@ from app.services.access import (
 )
 from app.services.optimization import OptimizationProfile, optimization_manager
 from app.services.normalization import normalization_manager
+from app.services.media_processing import media_processing_priority_manager
 from app.services.system_update import SystemUpdateError, system_update_manager
 from app.services.media_config import (
     CHANNEL_CONFIG_FILENAME,
@@ -683,6 +684,26 @@ class OptimizationProfileUpdate(BaseModel):
     confirm_resolution_loss: bool = False
 
 
+class ProcessingPriorityUpdate(BaseModel):
+    priority: Literal["low", "normal", "high"]
+
+
+@router.get("/library/processing/priority", summary="Get Media Processing Priority")
+def get_media_processing_priority():
+    return media_processing_priority_manager.api_data()
+
+
+@router.put("/library/processing/priority", summary="Update Media Processing Priority")
+def update_media_processing_priority(req: ProcessingPriorityUpdate):
+    profile = media_processing_priority_manager.update_priority(req.priority)
+    data = media_processing_priority_manager.api_data(profile)
+    data["active_job"] = (
+        normalization_manager.get_active_job() is not None
+        or optimization_manager.get_active_job() is not None
+    )
+    return data
+
+
 def _profile_api_data(profile: OptimizationProfile) -> dict:
     resolution = "1080p"
     if profile.max_height <= 480:
@@ -786,6 +807,14 @@ def get_library_normalization_job(job_id: int):
     return job.to_dict()
 
 
+@router.get("/library/normalization/{job_id}/details", summary="MP4 Normalization Job File Details")
+def get_library_normalization_job_details(job_id: int):
+    job = normalization_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabajo de conversión no encontrado.")
+    return job.details_dict()
+
+
 @router.post("/library/normalization/{job_id}/stop", summary="Stop MP4 Normalization Job")
 async def stop_library_normalization_job(job_id: int):
     try:
@@ -835,6 +864,14 @@ def get_library_optimization_job(job_id: int):
     if job is None:
         raise HTTPException(status_code=404, detail="Trabajo de optimización no encontrado.")
     return job.to_dict()
+
+
+@router.get("/library/optimization/{job_id}/details", summary="Optimization Job File Details")
+def get_library_optimization_job_details(job_id: int):
+    job = optimization_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabajo de optimización no encontrado.")
+    return job.details_dict()
 
 
 @router.post("/library/optimization/{job_id}/stop", summary="Stop Optimization Job")

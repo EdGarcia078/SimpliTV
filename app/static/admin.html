@@ -217,6 +217,29 @@
 
       <!-- 3. TAB: LIBRARY -->
       <section id="tab-library" class="tab-content">
+        <div class="section-toolbar library-toolbar">
+          <div class="library-toolbar-copy">
+            <h2>Biblioteca Multimedia</h2>
+            <p class="text-muted">Convierte archivos para máxima compatibilidad u optimiza el espacio de la biblioteca. Las emisiones siempre tienen prioridad sobre el procesamiento.</p>
+          </div>
+
+          <div class="processing-priority-compact" aria-label="Rendimiento del procesamiento multimedia">
+            <div class="processing-priority-topline">
+              <span class="processing-priority-title">Rendimiento FFmpeg</span>
+              <span id="processing-priority-status" class="processing-priority-status" aria-live="polite"></span>
+            </div>
+            <label class="processing-priority-select" for="processing-priority">
+              <span>Prioridad</span>
+              <select id="processing-priority">
+                <option value="low">Baja</option>
+                <option value="normal">Normal</option>
+                <option value="high">Alta</option>
+              </select>
+            </label>
+            <small id="processing-priority-description">Protege la emisión · 1 CPU lógica</small>
+          </div>
+        </div>
+
         <div class="admin-card optimization-card">
           <div class="optimization-header">
             <div>
@@ -248,7 +271,11 @@
           <div id="normalization-progress" class="optimization-progress hidden">
             <div class="optimization-progress-row">
               <strong id="norm-job-status">Preparando...</strong>
-              <span id="norm-job-count">0 / 0</span>
+              <div class="processing-progress-meta">
+                <span id="norm-job-count">0 / 0</span>
+                <span class="processing-elapsed" title="Tiempo transcurrido">⏱ <span id="norm-job-elapsed">00:00</span></span>
+                <button id="btn-normalization-details" class="processing-info-button" type="button" title="Ver archivos del proceso" aria-label="Ver archivos de la conversión">ⓘ</button>
+              </div>
             </div>
             <div class="optimization-progress-track"><div id="norm-job-bar" class="optimization-progress-bar"></div></div>
             <div class="optimization-progress-row text-muted">
@@ -271,16 +298,22 @@
             </div>
           </div>
 
-          <div class="optimization-settings" id="optimization-settings">
-            <div class="optimization-settings-title">
+          <details class="optimization-settings optimization-settings-collapsible" id="optimization-settings">
+            <summary class="optimization-settings-summary">
               <div>
-                <h4>Perfil de optimización</h4>
-                <p class="text-muted">Estos valores se aplican al próximo análisis y a la siguiente optimización.</p>
+                <strong>Perfil de optimización</strong>
+                <span>Resolución, calidad y criterios de ahorro</span>
               </div>
-              <button id="btn-save-optimization-profile" class="btn-secondary" type="button">Guardar configuración</button>
-            </div>
+              <span class="optimization-settings-summary-action" aria-hidden="true">Configurar</span>
+            </summary>
 
-            <div class="optimization-settings-grid">
+            <div class="optimization-settings-body">
+              <div class="optimization-settings-title">
+                <p class="text-muted">Estos valores se aplican al próximo análisis y a la siguiente optimización.</p>
+                <button id="btn-save-optimization-profile" class="btn-secondary" type="button">Guardar configuración</button>
+              </div>
+
+              <div class="optimization-settings-grid">
               <label class="optimization-setting">
                 <span>Resolución máxima</span>
                 <select id="opt-profile-resolution">
@@ -327,8 +360,9 @@
                 </label>
               </div>
             </details>
-            <div id="opt-profile-status" class="optimization-profile-status text-muted"></div>
-          </div>
+              <div id="opt-profile-status" class="optimization-profile-status text-muted"></div>
+            </div>
+          </details>
 
           <div id="optimization-summary" class="optimization-summary hidden">
             <div class="stats-row optimization-stats">
@@ -349,7 +383,11 @@
           <div id="optimization-progress" class="optimization-progress hidden">
             <div class="optimization-progress-row">
               <strong id="opt-job-status">Preparando...</strong>
-              <span id="opt-job-count">0 / 0</span>
+              <div class="processing-progress-meta">
+                <span id="opt-job-count">0 / 0</span>
+                <span class="processing-elapsed" title="Tiempo transcurrido">⏱ <span id="opt-job-elapsed">00:00</span></span>
+                <button id="btn-optimization-details" class="processing-info-button" type="button" title="Ver archivos del proceso" aria-label="Ver archivos de la optimización">ⓘ</button>
+              </div>
             </div>
             <div class="optimization-progress-track"><div id="opt-job-bar" class="optimization-progress-bar"></div></div>
             <div class="optimization-progress-row text-muted">
@@ -381,6 +419,26 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Modal: Detalle de procesamiento multimedia -->
+  <div id="modal-processing-details" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="processing-details-title">
+    <div class="modal-card modal-card-wide processing-details-modal">
+      <div class="processing-details-header">
+        <div>
+          <h3 id="processing-details-title">Archivos del proceso</h3>
+          <p id="processing-details-subtitle" class="subtitle">—</p>
+        </div>
+        <button type="button" class="processing-details-close modal-close" aria-label="Cerrar" title="Cerrar">×</button>
+      </div>
+
+      <div id="processing-details-summary" class="processing-details-summary" aria-live="polite"></div>
+      <div id="processing-details-list" class="processing-details-list" role="list"></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-outline modal-close">Cerrar</button>
+      </div>
+    </div>
   </div>
 
   <!-- Modal: Crear Usuario -->

@@ -15,6 +15,11 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.db.session import engine
 from app.services.channel import channel_engine
+from app.services.media_processing import (
+    ProcessingFileState,
+    ProcessingPriorityProfile,
+    media_processing_priority_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +160,9 @@ class OptimizationJob:
     error: Optional[str] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
+    started_priority: str = "low"
+    current_priority: Optional[str] = None
+    files: list[ProcessingFileState] = field(default_factory=list, repr=False)
 
     @property
     def progress(self) -> float:
@@ -162,9 +170,36 @@ class OptimizationJob:
             return 100.0 if self.status == "completed" else 0.0
         return round((self.processed / self.total) * 100, 2)
 
+    @property
+    def elapsed_seconds(self) -> float:
+        if self.started_at is None:
+            return 0.0
+        end = self.finished_at if self.finished_at is not None else time.time()
+        return round(max(0.0, end - self.started_at), 3)
+
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["progress"] = self.progress
+        return {
+            "id": self.id,
+            "status": self.status,
+            "total": self.total,
+            "processed": self.processed,
+            "optimized": self.optimized,
+            "skipped": self.skipped,
+            "errors": self.errors,
+            "bytes_saved": self.bytes_saved,
+            "current_file": self.current_file,
+            "error": self.error,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "started_priority": self.started_priority,
+            "current_priority": self.current_priority,
+            "progress": self.progress,
+            "elapsed_seconds": self.elapsed_seconds,
+        }
+
+    def details_dict(self) -> dict[str, Any]:
+        data = self.to_dict()
+        data["files"] = [item.to_dict() for item in self.files]
         return data
 
 
@@ -488,11 +523,24 @@ class OptimizationManager:
             if any(j.status in {"queued", "running"} for j in self._jobs.values()):
                 raise RuntimeError("Ya hay una optimización en ejecución.")
 
+            self._prune_finished_jobs()
+
             analysis = self._latest_analysis or await self.analyze()
             candidates = [item for item in analysis.items if item.status == "optimize"]
             if candidates and shutil.which("ffmpeg") is None:
                 raise RuntimeError("FFmpeg no está instalado o no está disponible en PATH.")
-            job = OptimizationJob(id=self._next_job_id, total=len(candidates))
+            job = OptimizationJob(
+                id=self._next_job_id,
+                total=len(candidates),
+                started_priority=media_processing_priority_manager.priority,
+                files=[
+                    ProcessingFileState(
+                        relative_path=item.relative_path,
+                        action="optimize",
+                    )
+                    for item in candidates
+                ],
+            )
             self._next_job_id += 1
             self._jobs[job.id] = job
             task = asyncio.create_task(self._run_job(job, candidates))
@@ -508,6 +556,17 @@ class OptimizationManager:
             (job for job in self._jobs.values() if job.status in {"queued", "running"}),
             None,
         )
+
+    def _prune_finished_jobs(self, keep: int = 3) -> None:
+        finished = sorted(
+            (job for job in self._jobs.values() if job.status not in {"queued", "running"}),
+            key=lambda job: job.id,
+            reverse=True,
+        )
+        for old_job in finished[max(0, keep):]:
+            self._jobs.pop(old_job.id, None)
+            self._tasks.pop(old_job.id, None)
+            self._processes.pop(old_job.id, None)
 
     async def cancel_job(self, job_id: int) -> OptimizationJob:
         job = self._jobs.get(job_id)
@@ -554,24 +613,49 @@ class OptimizationManager:
         return job
 
     async def _run_job(self, job: OptimizationJob, candidates: list[AnalysisItem]) -> None:
+        if len(job.files) != len(candidates):
+            job.files = [
+                ProcessingFileState(
+                    relative_path=item.relative_path,
+                    action="optimize",
+                )
+                for item in candidates
+            ]
         job.status = "running"
         job.started_at = time.time()
         try:
-            for item in candidates:
+            for item, file_state in zip(candidates, job.files):
                 job.current_file = item.relative_path
+                file_state.status = "processing"
+                file_state.started_at = time.time()
                 try:
-                    result, saved = await self._optimize_one(Path(item.path), job.id)
+                    processing_profile = media_processing_priority_manager.profile
+                    job.current_priority = processing_profile.key
+                    file_state.priority = processing_profile.key
+                    result, saved = await self._optimize_one(
+                        Path(item.path), job.id, processing_profile
+                    )
                     if result == "optimized":
                         job.optimized += 1
                         job.bytes_saved += saved
+                        file_state.status = "completed"
+                        file_state.result = "Optimización completada"
                     else:
                         job.skipped += 1
+                        file_state.status = "skipped"
+                        file_state.result = "Omitido al volver a comprobar el archivo"
                 except asyncio.CancelledError:
+                    file_state.status = "cancelled"
+                    file_state.result = "Procesamiento cancelado"
                     raise
                 except Exception as exc:
                     job.errors += 1
+                    file_state.status = "error"
+                    file_state.error = str(exc)
+                    file_state.result = "Error"
                     logger.exception("Optimization failed for %s: %s", item.path, exc)
                 finally:
+                    file_state.finished_at = time.time()
                     job.processed += 1
 
             job.status = "completed"
@@ -589,11 +673,17 @@ class OptimizationManager:
             self._latest_analysis = None
             self._processes.pop(job.id, None)
 
-    async def _optimize_one(self, path: Path, job_id: int) -> tuple[str, int]:
+    async def _optimize_one(
+        self,
+        path: Path,
+        job_id: int,
+        processing_profile: Optional[ProcessingPriorityProfile] = None,
+    ) -> tuple[str, int]:
         if not path.is_file() or is_optimization_temp_file(path):
             return "skipped", 0
 
         root = settings.resolved_media_dir.resolve()
+        processing_profile = processing_profile or media_processing_priority_manager.profile
         original = await probe_media(path, root)
 
         # Re-check immediately before encoding. The broadcast may have advanced
@@ -618,8 +708,8 @@ class OptimizationManager:
                     f"scale='min({profile.max_width},iw)':'min({profile.max_height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                 ]
 
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            ffmpeg_args = [
+                "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                 "-i", str(path),
                 "-map", "0:v:0",
                 "-map", "0:a?",
@@ -627,14 +717,18 @@ class OptimizationManager:
                 "-c:v", "libx265",
                 "-preset", profile.preset,
                 "-crf", str(profile.crf),
+                *media_processing_priority_manager.encoder_thread_args(processing_profile),
                 *vf,
                 "-c:a", "copy",
                 "-c:s", "copy",
                 "-map_metadata", "0",
             ]
             if path.suffix.lower() in {".mp4", ".m4v", ".mov"}:
-                cmd += ["-tag:v", "hvc1", "-movflags", "+faststart"]
-            cmd.append(str(temp_path))
+                ffmpeg_args += ["-tag:v", "hvc1", "-movflags", "+faststart"]
+            ffmpeg_args.append(str(temp_path))
+            cmd = media_processing_priority_manager.build_ffmpeg_command(
+                ffmpeg_args, processing_profile
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

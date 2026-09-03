@@ -20,6 +20,7 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+processing_profile.json
 
 # Media library
 media/*

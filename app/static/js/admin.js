@@ -195,6 +195,7 @@
         loadUsers(),
         loadLibrary(),
         loadOptimizationProfile(),
+        loadProcessingPriority(),
         loadSystemUpdateStatus(),
       ]);
       await loadGroups();
@@ -2577,9 +2578,218 @@
   // 3.5 OPTIMIZACIÓN DE BIBLIOTECA
   // =========================================================
 
+  const processingPrioritySelect = document.getElementById('processing-priority');
+  const processingPriorityDescription = document.getElementById('processing-priority-description');
+  const processingPriorityStatus = document.getElementById('processing-priority-status');
+  let savedProcessingPriority = 'low';
+  let processingPriorityStatusTimer = null;
+
+  const processingPriorityDescriptions = {
+    low: 'Protege la emisión · 1 CPU lógica',
+    normal: 'Equilibrio · hasta 2 CPU lógicas',
+    high: 'Máxima velocidad · CPU disponible',
+  };
+
+  function processingPriorityLabel(priority) {
+    return { low: 'baja', normal: 'normal', high: 'alta' }[priority] || priority || '—';
+  }
+
+  function setProcessingPriorityStatus(message, tone = '') {
+    if (!processingPriorityStatus) return;
+    if (processingPriorityStatusTimer) clearTimeout(processingPriorityStatusTimer);
+    processingPriorityStatus.textContent = message || '';
+    processingPriorityStatus.classList.toggle('is-error', tone === 'error');
+    processingPriorityStatus.classList.toggle('is-success', tone === 'success');
+    if (message && tone !== 'error') {
+      processingPriorityStatusTimer = setTimeout(() => {
+        processingPriorityStatus.textContent = '';
+        processingPriorityStatus.classList.remove('is-success');
+      }, 3500);
+    }
+  }
+
+  function renderProcessingPriority(profile) {
+    const priority = profile.priority || 'low';
+    savedProcessingPriority = priority;
+    if (processingPrioritySelect) processingPrioritySelect.value = priority;
+    if (processingPriorityDescription) {
+      processingPriorityDescription.textContent = processingPriorityDescriptions[priority] || profile.description || '';
+    }
+  }
+
+  async function loadProcessingPriority() {
+    try {
+      const res = await fetch('/api/admin/library/processing/priority', { credentials: 'same-origin' });
+      if (handleAuthFailure(res)) return;
+      const profile = await readResponseData(res);
+      if (!res.ok) throw new Error(getErrorMessage(profile, 'No se pudo cargar la prioridad de procesamiento.'));
+      renderProcessingPriority(profile);
+    } catch (err) {
+      console.error('Error loading media processing priority:', err);
+      setProcessingPriorityStatus('No se pudo cargar', 'error');
+    }
+  }
+
+  async function saveProcessingPriority() {
+    if (!processingPrioritySelect) return;
+    const requestedPriority = processingPrioritySelect.value;
+    processingPrioritySelect.disabled = true;
+    setProcessingPriorityStatus('Guardando…');
+    try {
+      const res = await fetch('/api/admin/library/processing/priority', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priority: requestedPriority }),
+      });
+      if (handleAuthFailure(res)) return;
+      const profile = await readResponseData(res);
+      if (!res.ok) throw new Error(getErrorMessage(profile, 'No se pudo guardar la prioridad.'));
+      renderProcessingPriority(profile);
+      setProcessingPriorityStatus(profile.active_job ? 'Siguiente archivo' : 'Guardado', 'success');
+    } catch (err) {
+      console.error('Error saving media processing priority:', err);
+      processingPrioritySelect.value = savedProcessingPriority;
+      if (processingPriorityDescription) {
+        processingPriorityDescription.textContent = processingPriorityDescriptions[savedProcessingPriority] || '';
+      }
+      setProcessingPriorityStatus('Error al guardar', 'error');
+    } finally {
+      processingPrioritySelect.disabled = false;
+    }
+  }
+
+  if (processingPrioritySelect) {
+    processingPrioritySelect.addEventListener('change', () => {
+      if (processingPriorityDescription) {
+        processingPriorityDescription.textContent = processingPriorityDescriptions[processingPrioritySelect.value] || '';
+      }
+      saveProcessingPriority();
+    });
+  }
+
+  const processingDetailsModal = document.getElementById('modal-processing-details');
+  const processingDetailsTitle = document.getElementById('processing-details-title');
+  const processingDetailsSubtitle = document.getElementById('processing-details-subtitle');
+  const processingDetailsSummary = document.getElementById('processing-details-summary');
+  const processingDetailsList = document.getElementById('processing-details-list');
+  let processingDetailsPollTimer = null;
+  let processingDetailsContext = null;
+
+  function processingActionLabel(action) {
+    return {
+      remux: 'Remux',
+      transcode: 'Transcodificación',
+      convert: 'Conversión',
+      optimize: 'Optimización HEVC',
+    }[action] || action || 'Procesamiento';
+  }
+
+  function processingFileVisual(status) {
+    return {
+      pending: { icon: '○', label: 'Pendiente' },
+      processing: { icon: '●', label: 'En proceso' },
+      completed: { icon: '✓', label: 'Procesado' },
+      skipped: { icon: '↷', label: 'Omitido' },
+      error: { icon: '!', label: 'Error' },
+      cancelled: { icon: '×', label: 'Cancelado' },
+    }[status] || { icon: '•', label: status || 'Desconocido' };
+  }
+
+  function renderProcessingDetails(job, kind) {
+    if (!processingDetailsModal || !processingDetailsList) return;
+    const files = Array.isArray(job.files) ? job.files : [];
+    const kindLabel = kind === 'normalization' ? 'Conversión MP4' : 'Optimización HEVC';
+    if (processingDetailsTitle) processingDetailsTitle.textContent = `Archivos · ${kindLabel}`;
+    if (processingDetailsSubtitle) {
+      processingDetailsSubtitle.textContent = `${job.processed ?? 0} de ${job.total ?? files.length} procesados · ${formatTime(job.elapsed_seconds ?? 0)} transcurridos`;
+    }
+
+    const counts = files.reduce((acc, file) => {
+      const key = file.status || 'pending';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    if (processingDetailsSummary) {
+      const chips = [
+        ['Procesados', counts.completed || 0],
+        ['En proceso', counts.processing || 0],
+        ['Pendientes', counts.pending || 0],
+        ['Omitidos', counts.skipped || 0],
+        ['Errores', counts.error || 0],
+      ];
+      if (counts.cancelled) chips.push(['Cancelados', counts.cancelled]);
+      processingDetailsSummary.innerHTML = chips
+        .map(([label, value]) => `<span class="processing-details-chip"><strong>${value}</strong> ${label}</span>`)
+        .join('');
+    }
+
+    if (!files.length) {
+      processingDetailsList.innerHTML = '<div class="processing-details-empty">Este trabajo no tiene archivos pendientes de procesamiento.</div>';
+      return;
+    }
+
+    processingDetailsList.innerHTML = files.map((file) => {
+      const visual = processingFileVisual(file.status);
+      const meta = [processingActionLabel(file.action), visual.label];
+      if (file.priority) meta.push(`Prioridad ${processingPriorityLabel(file.priority)}`);
+      if (file.started_at) meta.push(formatTime(file.elapsed_seconds ?? 0));
+      if (file.result && file.result !== visual.label) meta.push(file.result);
+      if (file.error) meta.push(file.error);
+      const isCurrent = file.status === 'processing' || file.relative_path === job.current_file;
+      return `
+        <div class="processing-file-item status-${escapeHtml(file.status || 'pending')}${isCurrent ? ' is-current' : ''}" role="listitem">
+          <span class="processing-file-icon" aria-hidden="true">${escapeHtml(visual.icon)}</span>
+          <div class="processing-file-main">
+            <div class="processing-file-path">${escapeHtml(file.relative_path || '—')}</div>
+            <div class="processing-file-meta">${meta.map(escapeHtml).join(' · ')}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function refreshProcessingDetails() {
+    if (processingDetailsPollTimer) clearTimeout(processingDetailsPollTimer);
+    const context = processingDetailsContext;
+    if (!context || !processingDetailsModal || processingDetailsModal.classList.contains('hidden')) return;
+
+    try {
+      const res = await fetch(`/api/admin/library/${context.kind}/${context.jobId}/details`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (handleAuthFailure(res)) return;
+      const job = await readResponseData(res);
+      if (!res.ok) throw new Error(getErrorMessage(job, 'No se pudo cargar el detalle del proceso.'));
+      renderProcessingDetails(job, context.kind);
+      if (job.status === 'queued' || job.status === 'running') {
+        processingDetailsPollTimer = setTimeout(refreshProcessingDetails, 1000);
+      }
+    } catch (err) {
+      console.error('Error loading processing details:', err);
+      if (processingDetailsSubtitle) processingDetailsSubtitle.textContent = err.message || 'No se pudo cargar el detalle.';
+    }
+  }
+
+  function openProcessingDetails(kind, jobId) {
+    const numericId = Number(jobId);
+    if (!processingDetailsModal || !Number.isFinite(numericId) || numericId <= 0) return;
+    processingDetailsContext = { kind, jobId: numericId };
+    if (processingDetailsTitle) {
+      processingDetailsTitle.textContent = kind === 'normalization' ? 'Archivos · Conversión MP4' : 'Archivos · Optimización HEVC';
+    }
+    if (processingDetailsSubtitle) processingDetailsSubtitle.textContent = 'Cargando detalle...';
+    if (processingDetailsSummary) processingDetailsSummary.innerHTML = '';
+    if (processingDetailsList) processingDetailsList.innerHTML = '<div class="processing-details-empty">Cargando archivos...</div>';
+    processingDetailsModal.classList.remove('hidden');
+    refreshProcessingDetails();
+  }
+
   const btnAnalyzeNormalization = document.getElementById('btn-analyze-normalization');
   const btnNormalizeLibrary = document.getElementById('btn-normalize-library');
   const btnStopNormalization = document.getElementById('btn-stop-normalization');
+  const btnNormalizationDetails = document.getElementById('btn-normalization-details');
   let normalizationPollTimer = null;
   let activeNormalizationJobId = null;
 
@@ -2635,10 +2845,15 @@
     const pct = Math.max(0, Math.min(100, Number(job.progress ?? 0)));
     document.getElementById('norm-job-bar').style.width = `${pct}%`;
     document.getElementById('norm-job-count').textContent = `${job.processed ?? 0} / ${job.total ?? 0}`;
+    document.getElementById('norm-job-elapsed').textContent = formatTime(job.elapsed_seconds ?? 0);
     document.getElementById('norm-job-file').textContent = job.current_file || '—';
     document.getElementById('norm-job-result').textContent = `Remux: ${job.remuxed ?? 0} · Transcodificados: ${job.transcoded ?? 0} · Errores: ${job.errors ?? 0}`;
+    if (btnNormalizationDetails) {
+      btnNormalizationDetails.disabled = !job.id;
+      btnNormalizationDetails.dataset.jobId = job.id || '';
+    }
     const labels = {
-      queued: 'En cola', running: `Convirtiendo ${pct.toFixed(0)}%`, completed: 'Conversión completada',
+      queued: 'En cola', running: `Convirtiendo ${pct.toFixed(0)}% · Prioridad ${processingPriorityLabel(job.current_priority || job.started_priority)}`, completed: 'Conversión completada',
       failed: 'Conversión fallida', cancelled: 'Conversión cancelada'
     };
     document.getElementById('norm-job-status').textContent = labels[job.status] || job.status;
@@ -2735,10 +2950,16 @@
   if (btnAnalyzeNormalization) btnAnalyzeNormalization.addEventListener('click', analyzeNormalizationLibrary);
   if (btnNormalizeLibrary) btnNormalizeLibrary.addEventListener('click', startNormalizationLibrary);
   if (btnStopNormalization) btnStopNormalization.addEventListener('click', stopNormalizationLibrary);
+  if (btnNormalizationDetails) {
+    btnNormalizationDetails.addEventListener('click', () => {
+      openProcessingDetails('normalization', btnNormalizationDetails.dataset.jobId || activeNormalizationJobId);
+    });
+  }
 
   const btnAnalyzeLibrary = document.getElementById('btn-analyze-library');
   const btnOptimizeLibrary = document.getElementById('btn-optimize-library');
   const btnStopOptimization = document.getElementById('btn-stop-optimization');
+  const btnOptimizationDetails = document.getElementById('btn-optimization-details');
   const btnSaveOptimizationProfile = document.getElementById('btn-save-optimization-profile');
   const optProfileResolution = document.getElementById('opt-profile-resolution');
   const optProfileCrf = document.getElementById('opt-profile-crf');
@@ -2923,10 +3144,15 @@
     const pct = Math.max(0, Math.min(100, Number(job.progress ?? 0)));
     document.getElementById('opt-job-bar').style.width = `${pct}%`;
     document.getElementById('opt-job-count').textContent = `${job.processed ?? 0} / ${job.total ?? 0}`;
+    document.getElementById('opt-job-elapsed').textContent = formatTime(job.elapsed_seconds ?? 0);
     document.getElementById('opt-job-file').textContent = job.current_file || '—';
     document.getElementById('opt-job-saved').textContent = `Ahorrado: ${formatBytes(job.bytes_saved ?? 0)}`;
+    if (btnOptimizationDetails) {
+      btnOptimizationDetails.disabled = !job.id;
+      btnOptimizationDetails.dataset.jobId = job.id || '';
+    }
     const labels = {
-      queued: 'En cola', running: `Optimizando ${pct.toFixed(0)}%`, completed: 'Optimización completada',
+      queued: 'En cola', running: `Optimizando ${pct.toFixed(0)}% · Prioridad ${processingPriorityLabel(job.current_priority || job.started_priority)}`, completed: 'Optimización completada',
       failed: 'Optimización fallida', cancelled: 'Optimización cancelada'
     };
     document.getElementById('opt-job-status').textContent = labels[job.status] || job.status;
@@ -3042,6 +3268,11 @@
   if (btnAnalyzeLibrary) btnAnalyzeLibrary.addEventListener('click', analyzeOptimizationLibrary);
   if (btnOptimizeLibrary) btnOptimizeLibrary.addEventListener('click', startOptimizationLibrary);
   if (btnStopOptimization) btnStopOptimization.addEventListener('click', stopOptimizationLibrary);
+  if (btnOptimizationDetails) {
+    btnOptimizationDetails.addEventListener('click', () => {
+      openProcessingDetails('optimization', btnOptimizationDetails.dataset.jobId || activeOptimizationJobId);
+    });
+  }
   if (btnSaveOptimizationProfile) btnSaveOptimizationProfile.addEventListener('click', saveOptimizationProfile);
   if (optProfileResolution) optProfileResolution.addEventListener('change', updateResolutionWarning);
 
