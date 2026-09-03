@@ -290,7 +290,7 @@
     }
   }
 
-  async function waitForSystemRestart() {
+  async function waitForSystemRestart(previousDeploymentId) {
     await new Promise((resolve) => window.setTimeout(resolve, 2500));
 
     const deadline = Date.now() + 60000;
@@ -300,8 +300,11 @@
           cache: 'no-store',
         });
         if (res.ok) {
-          window.location.reload();
-          return;
+          const health = await res.json();
+          if (!previousDeploymentId || health.deployment_id !== previousDeploymentId) {
+            window.location.reload();
+            return;
+          }
         }
       } catch {
         // A connection failure is expected while the process is restarting.
@@ -342,7 +345,10 @@
         title: data.message || 'Actualización aplicada. Reiniciando SimpliTV.',
         restarting: true,
       });
-      await waitForSystemRestart();
+      const previousDeploymentId = document
+        .querySelector('meta[name="simplitv-deployment"]')
+        ?.content?.trim();
+      await waitForSystemRestart(previousDeploymentId);
     } catch (err) {
       alert(err.message || 'No se pudo actualizar el sistema.');
       await loadSystemUpdateStatus();
