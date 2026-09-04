@@ -2,7 +2,11 @@ from datetime import datetime, timezone, timedelta
 from sqlmodel import Session
 from app.models.media import MediaItem
 from app.models.channel import Channel
-from app.services.selector import select_next_episode
+from app.services.selector import (
+    _sequential_franchise_movie,
+    _sequential_series_start,
+    select_next_episode,
+)
 
 def test_select_empty_library(test_db: Session):
     ch = Channel(name="Default")
@@ -119,3 +123,84 @@ def test_start_mode_falls_back_when_requested_parity_is_missing(test_db: Session
     selected = select_next_episode(test_db, ch.id)
     assert selected is not None
     assert selected.id == ep.id
+
+
+
+def _selector_media_item(
+    *,
+    item_id: int,
+    title: str,
+    episode_number: int,
+    last_played_at=None,
+    media_type: str = "episode",
+):
+    return MediaItem(
+        id=item_id,
+        channel_id=1,
+        media_title=title,
+        season_number=1,
+        episode_number=episode_number,
+        media_type=media_type,
+        relative_path=f"{title}/{item_id}.mp4",
+        file_path=f"{title}/{item_id}.mp4",
+        last_played_at=last_played_at,
+    )
+
+
+def test_sequential_series_handles_mixed_naive_and_aware_playback_dates():
+    """Legacy SQLite dates and timezone-aware UTC dates remain comparable."""
+    episodes = [
+        _selector_media_item(
+            item_id=1,
+            title="Mixed Dates",
+            episode_number=1,
+            last_played_at=datetime(2026, 9, 4, 20, 0),
+        ),
+        _selector_media_item(
+            item_id=2,
+            title="Mixed Dates",
+            episode_number=2,
+            last_played_at=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc),
+        ),
+        _selector_media_item(
+            item_id=3,
+            title="Mixed Dates",
+            episode_number=3,
+        ),
+    ]
+
+    selected = _sequential_series_start(episodes, start_mode="any", loop=True)
+
+    assert selected is not None
+    assert selected.id == 3
+
+
+def test_sequential_franchise_handles_mixed_naive_and_aware_playback_dates():
+    """The same compatibility rule applies to sequential movie franchises."""
+    movies = [
+        _selector_media_item(
+            item_id=11,
+            title="01 Movie",
+            episode_number=1,
+            media_type="movie",
+            last_played_at=datetime(2026, 9, 4, 20, 0, tzinfo=timezone.utc),
+        ),
+        _selector_media_item(
+            item_id=12,
+            title="02 Movie",
+            episode_number=1,
+            media_type="movie",
+            last_played_at=datetime(2026, 9, 4, 21, 0),
+        ),
+        _selector_media_item(
+            item_id=13,
+            title="03 Movie",
+            episode_number=1,
+            media_type="movie",
+        ),
+    ]
+
+    selected = _sequential_franchise_movie(movies)
+
+    assert selected is not None
+    assert selected.id == 13

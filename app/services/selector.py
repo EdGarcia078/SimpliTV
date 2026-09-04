@@ -1,6 +1,6 @@
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlmodel import Session, select
@@ -21,6 +21,21 @@ from app.services.media_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _datetime_order_key(value: Optional[datetime]) -> datetime:
+    """Normalize persisted datetimes to UTC before ordering them.
+
+    SQLite may return legacy timestamps without ``tzinfo`` while newer runtime
+    values can be timezone-aware. SimpliTV stores playback timestamps with UTC
+    semantics, so naive values are interpreted as UTC for comparisons only.
+    This avoids rewriting existing history and keeps old databases compatible.
+    """
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _weighted_choice(values: list, weights: list[int]):
@@ -100,7 +115,7 @@ def _sequential_series_start(
 
     played = [episode for episode in episodes if episode.last_played_at is not None]
     if played:
-        latest = max(played, key=lambda episode: episode.last_played_at)
+        latest = max(played, key=lambda episode: _datetime_order_key(episode.last_played_at))
         return _next_chronological_episode(episodes, latest, loop=loop)
 
     ordered = _ordered_episodes(episodes)
@@ -129,7 +144,7 @@ def _sequential_franchise_movie(movies: List[MediaItem]) -> Optional[MediaItem]:
     played = [movie for movie in movies if movie.last_played_at is not None]
     if not played:
         return ordered[0]
-    latest = max(played, key=lambda movie: movie.last_played_at)
+    latest = max(played, key=lambda movie: _datetime_order_key(movie.last_played_at))
     for index, movie in enumerate(ordered):
         if movie.id == latest.id:
             return ordered[(index + 1) % len(ordered)]
