@@ -21,7 +21,7 @@
 
       <div id="login-error" class="alert-error hidden"></div>
 
-      <form id="login-form" class="auth-form" autocomplete="off">
+      <form id="login-form" class="auth-form">
         <div class="form-group">
           <label for="username">Usuario</label>
           <input
@@ -30,6 +30,8 @@
             name="username"
             required
             placeholder="Introduce tu usuario"
+            maxlength="50"
+            autocomplete="username"
             autofocus
           />
         </div>
@@ -41,6 +43,8 @@
             id="password"
             name="password"
             required
+            maxlength="128"
+            autocomplete="current-password"
             placeholder="Introduce tu contraseña"
           />
         </div>
@@ -52,46 +56,6 @@
     </div>
   </div>
 
-  <script>
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const errBox = document.getElementById('login-error');
-      const btn = document.getElementById('btn-submit');
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-
-      errBox.classList.add('hidden');
-      btn.disabled = true;
-      btn.textContent = 'Verificando...';
-
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          errBox.textContent = data.detail || 'Usuario o contraseña incorrectos.';
-          errBox.classList.remove('hidden');
-          btn.disabled = false;
-          btn.textContent = 'Iniciar Sesión';
-          return;
-        }
-
-        // Redirect
-        const urlParams = new URLSearchParams(window.location.search);
-        const nextUrl = urlParams.get('next') || (data.role === 'admin' ? '/admin' : '/');
-        window.location.href = nextUrl;
-      } catch (err) {
-        errBox.textContent = 'Error de conexión con el servidor.';
-        errBox.classList.remove('hidden');
-        btn.disabled = false;
-        btn.textContent = 'Iniciar Sesión';
-      }
-    });
-  </script>
+  <script src="/static/js/login.js" defer></script>
 </body>
 </html>

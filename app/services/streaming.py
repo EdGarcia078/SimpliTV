@@ -1,7 +1,6 @@
-import os
 import re
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Tuple
+from typing import AsyncGenerator, Callable, Optional, Tuple
 import aiofiles
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -9,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from app.core.config import settings
 from app.models.media import MediaItem
 
-RANGE_HEADER_REGEX = re.compile(r"bytes=(\d*)-(\d*)")
+RANGE_HEADER_REGEX = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 def validate_file_safety(file_path: str | Path) -> Path:
@@ -26,18 +25,11 @@ def validate_file_safety(file_path: str | Path) -> Path:
             detail="Media file not found on disk."
         )
 
-    # Check path containment
-    try:
-        common = os.path.commonpath([str(path_obj), str(media_root)])
-        if common != str(media_root):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: File outside authorized media directory."
-            )
-    except ValueError:
+    # Resolve first so ``..`` and symlink escapes cannot bypass containment.
+    if not path_obj.is_relative_to(media_root):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: Invalid file path."
+            detail="Access denied: File outside authorized media directory."
         )
 
     return path_obj
@@ -51,8 +43,13 @@ def parse_range_header(range_header: Optional[str], file_size: int) -> Optional[
     """
     if not range_header or not range_header.startswith("bytes="):
         return None
+    if len(range_header) > 100:
+        raise HTTPException(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"},
+        )
 
-    match = RANGE_HEADER_REGEX.match(range_header.strip())
+    match = RANGE_HEADER_REGEX.fullmatch(range_header.strip())
     if not match:
         return None
 
@@ -92,25 +89,38 @@ async def file_chunk_generator(
     start: int,
     end: int,
     chunk_size: int = settings.STREAM_CHUNK_SIZE,
+    access_check: Optional[Callable[[], bool]] = None,
+    access_check_interval_bytes: int = 8 * 1024 * 1024,
 ) -> AsyncGenerator[bytes, None]:
-    """
-    Async generator yielding file chunks between start and end byte positions.
+    """Yield a byte range and periodically stop if authorization is revoked.
+
+    Authorization is already checked before headers are sent. Rechecking during
+    long transfers closes the remaining body if a user/session/channel loses
+    access while the video request is still active.
     """
     bytes_remaining = end - start + 1
+    bytes_since_access_check = access_check_interval_bytes
     async with aiofiles.open(file_path, mode="rb") as f:
         await f.seek(start)
         while bytes_remaining > 0:
+            if access_check is not None and bytes_since_access_check >= access_check_interval_bytes:
+                if not access_check():
+                    break
+                bytes_since_access_check = 0
+
             read_size = min(chunk_size, bytes_remaining)
             chunk = await f.read(read_size)
             if not chunk:
                 break
             bytes_remaining -= len(chunk)
+            bytes_since_access_check += len(chunk)
             yield chunk
 
 
 def create_media_stream_response(
     episode: MediaItem,
     range_header: Optional[str] = None,
+    access_check: Optional[Callable[[], bool]] = None,
 ) -> StreamingResponse:
     """
     Build a StreamingResponse with HTTP 206 Partial Content or 200 OK.
@@ -129,10 +139,10 @@ def create_media_stream_response(
             "Accept-Ranges": "bytes",
             "Content-Length": str(content_length),
             "Content-Type": mime_type,
-            "Cache-Control": "no-cache",
+            "Cache-Control": "private, no-store",
         }
         return StreamingResponse(
-            file_chunk_generator(file_path, start, end),
+            file_chunk_generator(file_path, start, end, access_check=access_check),
             status_code=status.HTTP_206_PARTIAL_CONTENT,
             headers=headers,
             media_type=mime_type,
@@ -143,9 +153,10 @@ def create_media_stream_response(
         "Accept-Ranges": "bytes",
         "Content-Length": str(file_size),
         "Content-Type": mime_type,
+        "Cache-Control": "private, no-store",
     }
     return StreamingResponse(
-        file_chunk_generator(file_path, 0, file_size - 1),
+        file_chunk_generator(file_path, 0, file_size - 1, access_check=access_check),
         status_code=status.HTTP_200_OK,
         headers=headers,
         media_type=mime_type,

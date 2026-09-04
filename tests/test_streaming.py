@@ -42,3 +42,26 @@ async def test_streaming_range_requests(client, test_db, sample_media_dir):
     # 5. Out-of-bounds Range (416 Range Not Satisfiable)
     invalid_range = client.get(f"/api/stream/{ep_id}", headers={"Range": "bytes=99999999-999999999"})
     assert invalid_range.status_code == 416
+
+
+@pytest.mark.asyncio
+async def test_open_stream_stops_when_periodic_access_check_is_revoked(tmp_path):
+    """An already-open response must not continue indefinitely after revocation."""
+    from app.services.streaming import file_chunk_generator
+
+    media_file = tmp_path / "revocation-test.mp4"
+    media_file.write_bytes(b"0123456789")
+    checks = iter([True, False])
+
+    chunks = []
+    async for chunk in file_chunk_generator(
+        media_file,
+        0,
+        9,
+        chunk_size=4,
+        access_check=lambda: next(checks, False),
+        access_check_interval_bytes=1,
+    ):
+        chunks.append(chunk)
+
+    assert b"".join(chunks) == b"0123"

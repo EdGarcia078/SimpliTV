@@ -119,6 +119,10 @@
     }
 
     if (response.status === 403) {
+      if (response.headers.get('X-SimpliTV-Password-Change-Required') === '1') {
+        window.location.href = '/change-password';
+        return true;
+      }
       alert(
         'Acceso restringido: Se requieren permisos de administrador.'
       );
@@ -171,6 +175,11 @@
       }
 
       currentUser = await res.json();
+
+      if (currentUser.must_change_password) {
+        window.location.href = '/change-password';
+        return;
+      }
 
       if (currentUser.role !== 'admin') {
         alert(

@@ -23,8 +23,14 @@ Este proyecto está optimizado para ejecutarse eficientemente en hardware de rec
 
 2. **Instalar dependencias**:
    ```bash
-   pip install -r requirements.txt
+   pip install --upgrade -r requirements.txt
    ```
+
+   Opcionalmente puedes copiar la configuración de ejemplo antes de arrancar:
+   ```bash
+   cp .env.example .env
+   ```
+   Los valores predeterminados ya permiten uso doméstico por `http://IP_LOCAL:8000`.
 
 3. **Colocar la biblioteca de canales**:
    La jerarquía canónica es `media/<CANAL>/Series/...` y `media/<CANAL>/Movies/...`:
@@ -229,8 +235,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 - **Interfaz Web del Reproductor**: `http://localhost:8000` (o `http://<IP_LOCAL>:8000` desde el móvil, Smart TV o tablet)
-- **Documentación de la API (Swagger UI)**: `http://localhost:8000/docs`
-- **Documentación alternativa (ReDoc)**: `http://localhost:8000/redoc`
+- La documentación interactiva de la API está deshabilitada por defecto. Para desarrollo, configura `ENABLE_API_DOCS=true` para habilitar `/docs`, `/redoc` y `/openapi.json`.
+
+### Primer inicio y seguridad
+
+Cuando la tabla de usuarios está vacía, SimpliTV crea `admin / admin123`. En el primer login ese administrador debe establecer una contraseña nueva antes de acceder normalmente a la TV, streams o panel administrativo. Esto mantiene sencilla una instalación nueva o una base de datos reiniciada sin depender de comandos CLI.
+
+El acceso doméstico mediante `http://<IP_LOCAL>:8000` sigue soportado por defecto. Si expones SimpliTV fuera de tu LAN, colócalo detrás de HTTPS y configura `SECURE_COOKIES=true`; `ENABLE_HSTS=true` debe utilizarse únicamente cuando todo el acceso sea HTTPS. Cloudflare, un dominio o un reverse proxy son opcionales, no requisitos del proyecto.
+
+Consulta [SECURITY.md](SECURITY.md) para el modelo de amenazas, proxies confiables, sesiones, permisos y recomendaciones de despliegue.
 
 ### Actualización desde el panel administrativo
 

@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from app.db.session import create_db_and_tables, engine
 from app.models.user import User
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_new_password
 
 
 def create_admin_cmd(args, session: Optional[Session] = None):
@@ -30,8 +30,10 @@ def create_admin_cmd(args, session: Optional[Session] = None):
             print("Error: Las contraseñas no coinciden.", file=sys.stderr)
             sys.exit(1)
 
-    if len(password) < 6:
-        print("Error: La contraseña debe tener al menos 6 caracteres.", file=sys.stderr)
+    try:
+        validate_new_password(password)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     def _execute(s: Session):
@@ -40,6 +42,7 @@ def create_admin_cmd(args, session: Optional[Session] = None):
             existing.password_hash = hash_password(password)
             existing.role = "admin"
             existing.is_active = True
+            existing.must_change_password = False
             s.add(existing)
             s.commit()
             print(f"El usuario existente '{username}' ha sido actualizado a Administrador.")

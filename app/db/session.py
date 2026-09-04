@@ -5,7 +5,7 @@ from sqlalchemy import event, inspect
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from app.core.config import settings
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.models.user import User
 # Import preference models before metadata.create_all() so their tables are registered.
 from app.models.preferences import UserPreference, UserBlockedChannel  # noqa: F401
@@ -38,6 +38,8 @@ def create_db_and_tables() -> None:
     """Initialize database tables and apply lightweight compatible migrations."""
     _migrate_legacy_media_table()
     SQLModel.metadata.create_all(engine)
+    _migrate_user_security_fields()
+    _migrate_session_security_fields()
     _migrate_channel_start_mode()
     _migrate_channel_folder_name()
     _migrate_episode_media_fields()
@@ -46,6 +48,7 @@ def create_db_and_tables() -> None:
     _repair_orphan_channel_relations()
     with Session(engine) as session:
         ensure_default_admin(session)
+        _mark_default_password_for_change(session)
 
 
 def ensure_default_admin(session: Session) -> Optional[User]:
@@ -63,16 +66,61 @@ def ensure_default_admin(session: Session) -> Optional[User]:
         password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
         role="admin",
         is_active=True,
+        must_change_password=True,
     )
     session.add(admin)
     session.commit()
     session.refresh(admin)
     logger.warning(
-        "Created the default SimpliTV administrator '%s'. Change its password after first login.",
+        "Created the default SimpliTV administrator '%s' with the documented first-run password. A password change is required before normal use.",
         DEFAULT_ADMIN_USERNAME,
     )
     return admin
 
+
+
+def _migrate_user_security_fields() -> None:
+    """Add security flags to existing SQLite user tables without resetting data."""
+    inspector = inspect(engine)
+    if "users" not in set(inspector.get_table_names()):
+        return
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    if "must_change_password" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+
+def _migrate_session_security_fields() -> None:
+    """Add an absolute session lifetime while preserving active legacy sessions."""
+    inspector = inspect(engine)
+    if "user_sessions" not in set(inspector.get_table_names()):
+        return
+    columns = {column["name"] for column in inspector.get_columns("user_sessions")}
+    if "absolute_expires_at" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE user_sessions ADD COLUMN absolute_expires_at DATETIME"
+            )
+
+
+def _mark_default_password_for_change(session: Session) -> None:
+    """Require a password change whenever the documented admin password is active.
+
+    This also covers installations created by older SimpliTV releases before the
+    ``must_change_password`` column existed. Other accounts are never modified.
+    """
+    admin = session.exec(select(User).where(User.username == DEFAULT_ADMIN_USERNAME)).first()
+    if admin is None or admin.must_change_password:
+        return
+    if verify_password(DEFAULT_ADMIN_PASSWORD, admin.password_hash):
+        admin.must_change_password = True
+        session.add(admin)
+        session.commit()
+        logger.warning(
+            "The default administrator password is still active. Change it before exposing SimpliTV outside a trusted LAN."
+        )
 
 
 def _migrate_legacy_media_table() -> None:

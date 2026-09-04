@@ -131,12 +131,12 @@ def test_profile_change_requires_current_password(auth_client, test_db, normal_u
 
     changed_password = auth_client.patch(
         "/api/auth/me",
-        json={"current_password": "viewer123", "new_password": "viewer456"},
+        json={"current_password": "viewer123", "new_password": "viewer456secure"},
     )
     assert changed_password.status_code == 200
 
     test_db.refresh(normal_user)
-    assert verify_password("viewer456", normal_user.password_hash)
+    assert verify_password("viewer456secure", normal_user.password_hash)
     assert not verify_password("viewer123", normal_user.password_hash)
 
 

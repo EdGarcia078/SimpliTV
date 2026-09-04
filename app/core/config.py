@@ -10,8 +10,33 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
 
+    # Listen on the LAN by default so TVs/phones can reach a home installation.
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+
+    # Browser/session hardening. HTTP remains intentionally supported on trusted
+    # home LANs. Internet-facing HTTPS deployments should set SECURE_COOKIES and
+    # ENABLE_HSTS to true explicitly.
+    SECURE_COOKIES: bool = False
+    ENABLE_HSTS: bool = False
+    ENABLE_API_DOCS: bool = False
+    SESSION_EXPIRE_DAYS: int = 7
+    SESSION_ABSOLUTE_MAX_DAYS: int = 30
+
+    # Comma-separated IPs/CIDRs of reverse proxies whose forwarding headers may
+    # be trusted (for example: "127.0.0.1,::1"). Empty means trust none.
+    TRUSTED_PROXIES: str = ""
+
+    # Optional comma-separated Host allow-list for public deployments. Empty
+    # preserves flexible localhost/IP/hostname access on home networks.
+    ALLOWED_HOSTS: str = ""
+
+    # Request/login abuse controls.
+    MAX_REQUEST_BODY_BYTES: int = 2 * 1024 * 1024
+    LOGIN_MAX_FAILURES: int = 5
+    LOGIN_WINDOW_SECONDS: int = 15 * 60
+    LOGIN_LOCKOUT_SECONDS: int = 15 * 60
+    LOGIN_IP_MAX_FAILURES: int = 25
 
     # Base directory of the project
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
@@ -21,9 +46,6 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR / 'simplitv.db'}"
-
-    # Secret key for security/sessions
-    SECRET_KEY: str = "simplitv-secret-key-change-in-production"
 
     # Supported video formats
     SUPPORTED_EXTENSIONS: tuple[str, ...] = (

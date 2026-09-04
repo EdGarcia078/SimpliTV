@@ -10,6 +10,7 @@ from app.core.security import (
     SESSION_COOKIE_NAME,
     generate_session_token,
     hash_password,
+    session_token_key,
     verify_password,
 )
 from app.db.session import ensure_default_admin
@@ -101,7 +102,7 @@ def test_returning_user_session_is_renewed_for_another_seven_days(
 ):
     token = auth_client.cookies.get(SESSION_COOKIE_NAME)
     active_session = test_db.exec(
-        select(UserSession).where(UserSession.session_token == token)
+        select(UserSession).where(UserSession.session_token == session_token_key(token))
     ).one()
     previous_expiry = datetime.now(timezone.utc) + timedelta(hours=12)
     active_session.expires_at = previous_expiry
@@ -116,7 +117,7 @@ def test_returning_user_session_is_renewed_for_another_seven_days(
     assert f"Max-Age={7 * 86400}" in response.headers["set-cookie"]
 
     renewed_session = test_db.exec(
-        select(UserSession).where(UserSession.session_token == token)
+        select(UserSession).where(UserSession.session_token == session_token_key(token))
     ).one()
     renewed_expiry = renewed_session.expires_at
     if renewed_expiry.tzinfo is None:
@@ -205,7 +206,7 @@ def test_admin_create_user(admin_client, test_db: Session):
         "/api/admin/users",
         json={
             "username": "new_viewer",
-            "password": "password123",
+            "password": "password1234",
             "role": "user",
             "group_id": group.id,
         },
@@ -219,7 +220,7 @@ def test_admin_create_user(admin_client, test_db: Session):
     # Verify user and mandatory membership in DB
     user_db = test_db.exec(select(User).where(User.username == "new_viewer")).first()
     assert user_db is not None
-    assert user_db.password_hash != "password123"
+    assert user_db.password_hash != "password1234"
     membership = test_db.exec(
         select(UserAccessGroup).where(
             UserAccessGroup.user_id == user_db.id,
@@ -232,7 +233,7 @@ def test_admin_create_user(admin_client, test_db: Session):
 def test_admin_cannot_create_viewer_without_group(admin_client):
     res = admin_client.post(
         "/api/admin/users",
-        json={"username": "orphan_viewer", "password": "password123", "role": "user"},
+        json={"username": "orphan_viewer", "password": "password1234", "role": "user"},
     )
     assert res.status_code == 400
     assert "grupo" in res.json()["detail"].lower()
@@ -241,7 +242,7 @@ def test_admin_cannot_create_viewer_without_group(admin_client):
 def test_admin_can_create_admin_without_group(admin_client):
     res = admin_client.post(
         "/api/admin/users",
-        json={"username": "second_admin", "password": "password123", "role": "admin"},
+        json={"username": "second_admin", "password": "password1234", "role": "admin"},
     )
     assert res.status_code == 201
     assert res.json()["role"] == "admin"
@@ -328,6 +329,7 @@ def test_database_initialization_seeds_default_admin_once(tmp_path, monkeypatch)
         original_hash = created.password_hash
         assert created.role == "admin"
         assert created.is_active is True
+        assert created.must_change_password is True
         assert verify_password("admin123", original_hash)
 
     db_session.create_db_and_tables()
@@ -344,6 +346,7 @@ def test_default_admin_is_created_and_can_log_in(unauth_client, test_db: Session
     assert created.username == "admin"
     assert created.role == "admin"
     assert created.is_active is True
+    assert created.must_change_password is True
     assert created.password_hash != "admin123"
     assert verify_password("admin123", created.password_hash)
 
@@ -353,6 +356,7 @@ def test_default_admin_is_created_and_can_log_in(unauth_client, test_db: Session
     )
     assert response.status_code == 200
     assert response.json()["role"] == "admin"
+    assert response.json()["must_change_password"] is True
 
 
 def test_default_admin_seed_is_idempotent_and_never_overwrites_users(test_db: Session):

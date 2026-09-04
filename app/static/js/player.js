@@ -278,6 +278,10 @@
         return false;
       }
       currentUser = await res.json();
+      if (currentUser.must_change_password) {
+        window.location.href = '/change-password';
+        return false;
+      }
       if (currentUser.role === 'admin' && btnAdminLink) {
         btnAdminLink.classList.remove('hidden');
       }
@@ -851,8 +855,8 @@
         setSettingsMessage(profileSettingsMessage, 'Las nuevas contraseñas no coinciden.');
         return;
       }
-      if (newPassword && newPassword.length < 6) {
-        setSettingsMessage(profileSettingsMessage, 'La nueva contraseña debe tener al menos 6 caracteres.');
+      if (newPassword && newPassword.length < 12) {
+        setSettingsMessage(profileSettingsMessage, 'La nueva contraseña debe tener al menos 12 caracteres.');
         return;
       }
 

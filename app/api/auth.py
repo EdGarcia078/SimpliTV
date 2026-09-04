@@ -2,18 +2,31 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
-from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_current_user
+from app.api.deps import (
+    _find_valid_user_session,
+    get_current_user,
+    get_current_user_unrestricted,
+)
+from app.core.config import settings
+from app.core.request_security import get_client_ip, login_rate_limiter
 from app.core.security import (
     SESSION_COOKIE_NAME,
-    SESSION_EXPIRE_DAYS,
+    as_utc,
     generate_session_token,
+    get_session_absolute_expiry,
     get_session_expiry,
     hash_password,
+    perform_dummy_password_check,
+    session_cookie_max_age,
+    session_token_key,
+    session_token_matches,
+    validate_new_password,
     verify_password,
 )
 from app.db.session import get_session
@@ -32,31 +45,69 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 class ProfileUpdateRequest(BaseModel):
-    current_password: str = Field(min_length=1)
+    current_password: str = Field(min_length=1, max_length=128)
     username: Optional[str] = Field(default=None, max_length=50)
-    new_password: Optional[str] = None
+    new_password: Optional[str] = Field(default=None, max_length=128)
+
+
+class MandatoryPasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=1, max_length=128)
 
 
 class PasswordVerificationRequest(BaseModel):
-    current_password: str = Field(min_length=1)
+    current_password: str = Field(min_length=1, max_length=128)
 
 
 class ViewerPreferencesUpdateRequest(BaseModel):
-    current_password: str = Field(min_length=1)
-    blocked_channel_ids: Optional[list[int]] = None
+    current_password: str = Field(min_length=1, max_length=128)
+    blocked_channel_ids: Optional[list[int]] = Field(default=None, max_length=10000)
     sensitive_content_enabled: Optional[bool] = None
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
-    """Set the browser cookie for a fresh seven-day session window."""
+def _user_read(user: User) -> UserRead:
+    return UserRead(
+        id=user.id,  # type: ignore[arg-type]
+        username=user.username,
+        role=user.role,
+        is_active=user.is_active,
+        must_change_password=user.must_change_password,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
+
+
+def _request_session_token(
+    session_cookie: Optional[str],
+    authorization: Optional[str],
+) -> Optional[str]:
+    if session_cookie:
+        return session_cookie
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:].strip() or None
+    return None
+
+def _set_session_cookie(response: Response, token: str, expires_at: datetime) -> None:
+    """Set a revocable session cookie compatible with HTTP LAN and optional HTTPS."""
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
-        max_age=SESSION_EXPIRE_DAYS * 86400,
+        max_age=session_cookie_max_age(expires_at),
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=settings.SECURE_COOKIES,
         path="/",
+    )
+
+
+def _delete_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.SECURE_COOKIES,
     )
 
 
@@ -66,6 +117,16 @@ def _require_current_password(user: User, password: str) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="La contraseña actual no es correcta.",
         )
+
+
+def _validate_password_or_400(password: str) -> None:
+    try:
+        validate_new_password(password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 def _viewer_preferences_payload(session: Session, user: User) -> dict:
@@ -80,9 +141,6 @@ def _viewer_preferences_payload(session: Session, user: User) -> dict:
             select(Channel).where(Channel.id.in_(granted_ids)).order_by(Channel.id)
         ).all()
 
-    # Sensitive channels are not disclosed anywhere in this section until the
-    # user has explicitly enabled the mode. Once enabled, they can be blocked
-    # exactly like any other channel granted by the access group.
     if not preference.sensitive_content_enabled:
         channels = [channel for channel in channels if not channel_is_sensitive(channel)]
 
@@ -104,73 +162,77 @@ def _viewer_preferences_payload(session: Session, user: User) -> dict:
 @router.post("/login", response_model=UserRead, summary="User Login")
 def login(
     credentials: LoginRequest,
+    request: Request,
     response: Response,
     session: Session = Depends(get_session),
-    ) -> UserRead:
-    """
-    Authenticate user and set secure session cookie.
-    Returns generic error message to prevent username enumeration.
-    """
-    user = session.exec(select(User).where(User.username == credentials.username.strip())).first()
+) -> UserRead:
+    """Authenticate with generic failures, brute-force controls and a hashed session."""
+    username = credentials.username.strip()
+    client_ip = get_client_ip(request)
+    allowed, retry_after = login_rate_limiter.check(client_ip, username)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Demasiados intentos de inicio de sesión. Intenta nuevamente más tarde.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
-    if not user or not verify_password(credentials.password, user.password_hash) or not user.is_active:
+    user = session.exec(select(User).where(User.username == username)).first()
+    if user is None:
+        perform_dummy_password_check(credentials.password)
+        login_rate_limiter.record_failure(client_ip, username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario o contraseña incorrectos.",
         )
 
-    # Update last login
-    user.last_login_at = datetime.now(timezone.utc)
+    password_ok = verify_password(credentials.password, user.password_hash)
+    if not password_ok or not user.is_active:
+        login_rate_limiter.record_failure(client_ip, username)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario o contraseña incorrectos.",
+        )
+
+    login_rate_limiter.record_success(client_ip, username)
+    now = datetime.now(timezone.utc)
+    user.last_login_at = now
     session.add(user)
 
-    # Create session record
     token = generate_session_token()
-    expiry = get_session_expiry()
+    absolute_expiry = get_session_absolute_expiry(now)
+    expiry = get_session_expiry(now=now, absolute_expiry=absolute_expiry)
     user_session = UserSession(
-        session_token=token,
-        user_id=user.id,  # type: ignore
+        session_token=session_token_key(token),
+        user_id=user.id,  # type: ignore[arg-type]
+        created_at=now,
         expires_at=expiry,
+        absolute_expires_at=absolute_expiry,
     )
     session.add(user_session)
     session.commit()
     session.refresh(user)
 
-    # Set secure HttpOnly session cookie
-    _set_session_cookie(response, token)
-
-    return UserRead(
-        id=user.id,  # type: ignore
-        username=user.username,
-        role=user.role,
-        is_active=user.is_active,
-        created_at=user.created_at,
-        last_login_at=user.last_login_at,
-    )
+    _set_session_cookie(response, token, expiry)
+    return _user_read(user)
 
 
 @router.post("/logout", summary="User Logout")
 def logout(
     response: Response,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
     session: Session = Depends(get_session),
 ):
-    """
-    Invalidate active session and remove session cookie.
-    """
-    if session_cookie:
-        stmt = select(UserSession).where(UserSession.session_token == session_cookie)
-        active_session = session.exec(stmt).first()
+    """Invalidate the current browser/Bearer session and remove its cookie."""
+    token = _request_session_token(session_cookie, authorization)
+    if token:
+        active_session = _find_valid_user_session(session, token)
         if active_session:
             session.delete(active_session)
             session.commit()
 
-    response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
-        path="/",
-        httponly=True,
-        samesite="lax",
-    )
-
+    _delete_session_cookie(response)
     return {"message": "Sesión cerrada correctamente."}
 
 
@@ -178,32 +240,74 @@ def logout(
 def get_me(
     response: Response,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_unrestricted),
     session: Session = Depends(get_session),
 ) -> UserRead:
-    """Return the current user and renew cookie sessions for another seven days."""
+    """Return the current user and renew cookie sessions up to their hard limit."""
     if session_cookie:
-        active_session = session.exec(
-            select(UserSession).where(
-                UserSession.session_token == session_cookie,
-                UserSession.user_id == current_user.id,
-                UserSession.expires_at > datetime.now(timezone.utc),
+        active_session = _find_valid_user_session(session, session_cookie)
+        if active_session is not None and active_session.user_id == current_user.id:
+            absolute_expiry = (
+                as_utc(active_session.absolute_expires_at)
+                if active_session.absolute_expires_at is not None
+                else get_session_absolute_expiry(active_session.created_at)
             )
-        ).first()
-        if active_session is not None:
-            active_session.expires_at = get_session_expiry()
+            active_session.absolute_expires_at = absolute_expiry
+            active_session.expires_at = get_session_expiry(
+                absolute_expiry=absolute_expiry
+            )
             session.add(active_session)
             session.commit()
-            _set_session_cookie(response, session_cookie)
+            _set_session_cookie(response, session_cookie, active_session.expires_at)
 
-    return UserRead(
-        id=current_user.id,  # type: ignore
-        username=current_user.username,
-        role=current_user.role,
-        is_active=current_user.is_active,
-        created_at=current_user.created_at,
-        last_login_at=current_user.last_login_at,
-    )
+    return _user_read(current_user)
+
+
+@router.post(
+    "/change-default-password",
+    response_model=UserRead,
+    summary="Complete Required First Password Change",
+)
+def change_default_password(
+    payload: MandatoryPasswordChangeRequest,
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
+    current_user: User = Depends(get_current_user_unrestricted),
+    session: Session = Depends(get_session),
+) -> UserRead:
+    """Unlock an automatically seeded administrator by replacing its known password."""
+    if not current_user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Esta cuenta no tiene un cambio obligatorio de contraseña pendiente.",
+        )
+
+    _require_current_password(current_user, payload.current_password)
+    _validate_password_or_400(payload.new_password)
+    if verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nueva contraseña debe ser diferente de la contraseña actual.",
+        )
+
+    current_user.password_hash = hash_password(payload.new_password)
+    current_user.must_change_password = False
+    session.add(current_user)
+
+    # Keep only the browser completing the mandatory change. This prevents a
+    # copied default-password session from surviving after the password changes.
+    current_token = _request_session_token(session_cookie, authorization)
+    active_sessions = session.exec(
+        select(UserSession).where(UserSession.user_id == current_user.id)
+    ).all()
+    for active in active_sessions:
+        if not current_token or not session_token_matches(active.session_token, current_token):
+            session.delete(active)
+
+    session.commit()
+    session.refresh(current_user)
+    return _user_read(current_user)
+
 
 @router.get("/access-events", summary="Subscribe to realtime account access changes")
 async def access_events(
@@ -212,13 +316,7 @@ async def access_events(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Push an SSE event whenever this account's channel authorization changes.
-
-    A fresh database session is used for every check, so updates made by another
-    device or by the administrator are observed without waiting for the player's
-    normal channel resynchronization interval.  The fingerprint also reads the
-    portable ``channel.yaml`` sensitive flag, so those edits propagate as well.
-    """
+    """Push an SSE event whenever this account's channel authorization changes."""
     bind = session.get_bind()
     user_id = current_user.id
     last_fingerprint = build_user_access_fingerprint(session, current_user)
@@ -226,11 +324,7 @@ async def access_events(
     async def event_stream():
         nonlocal last_fingerprint
         keep_alive_elapsed = 0.0
-        # Tell EventSource to retry reasonably quickly after short LAN outages.
         yield "retry: 1000\n\n"
-        # Always publish the current revision when a connection (or automatic
-        # reconnection) is established. This closes the race where a browser was
-        # offline exactly while its permissions changed.
         initial_payload = json.dumps({"revision": last_fingerprint[:16], "initial": True})
         yield f"event: access-update\ndata: {initial_payload}\n\n"
 
@@ -242,23 +336,19 @@ async def access_events(
             keep_alive_elapsed += 0.5
 
             with Session(bind) as live_session:
-                # A password reset/change, logout from this session, account
-                # deactivation or deletion must invalidate an already-open SSE
-                # stream instead of letting a stale browser linger indefinitely.
                 if not session_cookie:
                     yield "event: session-invalid\ndata: {}\n\n"
                     break
 
-                now = datetime.now(timezone.utc)
-                active_session = live_session.exec(
-                    select(UserSession).where(
-                        UserSession.session_token == session_cookie,
-                        UserSession.user_id == user_id,
-                        UserSession.expires_at > now,
-                    )
-                ).first()
+                active_session = _find_valid_user_session(live_session, session_cookie)
                 live_user = live_session.get(User, user_id)
-                if active_session is None or live_user is None or not live_user.is_active:
+                if (
+                    active_session is None
+                    or active_session.user_id != user_id
+                    or live_user is None
+                    or not live_user.is_active
+                    or live_user.must_change_password
+                ):
                     yield "event: session-invalid\ndata: {}\n\n"
                     break
 
@@ -287,6 +377,7 @@ async def access_events(
 def update_me(
     payload: ProfileUpdateRequest,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> UserRead:
@@ -314,21 +405,21 @@ def update_me(
             changed = True
 
     if payload.new_password is not None and payload.new_password != "":
-        if len(payload.new_password) < 6:
+        _validate_password_or_400(payload.new_password)
+        if verify_password(payload.new_password, current_user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="La nueva contraseña debe tener al menos 6 caracteres.",
+                detail="La nueva contraseña debe ser diferente de la contraseña actual.",
             )
         current_user.password_hash = hash_password(payload.new_password)
         changed = True
 
-        # Keep the current browser signed in, but revoke other active sessions
-        # because a password change is a security-sensitive account action.
+        current_token = _request_session_token(session_cookie, authorization)
         other_sessions = session.exec(
             select(UserSession).where(UserSession.user_id == current_user.id)
         ).all()
         for active in other_sessions:
-            if not session_cookie or active.session_token != session_cookie:
+            if not current_token or not session_token_matches(active.session_token, current_token):
                 session.delete(active)
 
     if changed:
@@ -336,14 +427,7 @@ def update_me(
         session.commit()
         session.refresh(current_user)
 
-    return UserRead(
-        id=current_user.id,  # type: ignore[arg-type]
-        username=current_user.username,
-        role=current_user.role,
-        is_active=current_user.is_active,
-        created_at=current_user.created_at,
-        last_login_at=current_user.last_login_at,
-    )
+    return _user_read(current_user)
 
 
 @router.post("/preferences", summary="Unlock Viewer Preferences")

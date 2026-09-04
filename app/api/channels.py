@@ -1,18 +1,44 @@
 import asyncio
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing import List, Optional
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
-from app.api.deps import get_current_user
+from app.api.deps import _find_valid_user_session, get_current_user
+from app.core.security import SESSION_COOKIE_NAME
 from app.db.session import get_session
 from app.models.channel import Channel, ChannelRead, NowPlayingResponse
 from app.models.user import User
 from app.services.channel import channel_engine
-from app.services.access import get_player_channel_ids, require_channel_access
+from app.services.access import get_player_channel_ids, require_channel_access, user_can_access_channel
 from app.services.media_config import get_channel_dir, load_channel_config
 from app.services.scanner import get_library_revision
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
+
+
+def _request_session_token(session_cookie, authorization):
+    if session_cookie:
+        return session_cookie
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:].strip() or None
+    return None
+
+
+def _live_user_is_valid(bind, token, user_id, channel_id=None):
+    if not token:
+        return False
+    with Session(bind) as live_session:
+        active_session = _find_valid_user_session(live_session, token)
+        if active_session is None or active_session.user_id != user_id:
+            return False
+        live_user = live_session.get(User, user_id)
+        if live_user is None or not live_user.is_active or live_user.must_change_password:
+            return False
+        if channel_id is not None:
+            channel = live_session.get(Channel, channel_id)
+            if channel is None or not user_can_access_channel(live_session, live_user, channel_id):
+                return False
+        return True
 
 
 def to_channel_read(channel: Channel) -> ChannelRead:
@@ -56,11 +82,15 @@ async def list_channels(
 @router.get("/catalog-events", summary="Subscribe to live library catalog changes")
 async def catalog_events(
     request: Request,
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     """Publish a lightweight revision whenever the filesystem catalog changes."""
     bind = session.get_bind()
+    user_id = user.id
+    token = _request_session_token(session_cookie, authorization)
     last_revision = get_library_revision(session)
 
     async def event_stream():
@@ -73,6 +103,8 @@ async def catalog_events(
                 break
             await asyncio.sleep(0.5)
             keep_alive += 0.5
+            if not _live_user_is_valid(bind, token, user_id):
+                break
             with Session(bind) as live_session:
                 revision = get_library_revision(live_session)
             if revision != last_revision:
@@ -120,6 +152,8 @@ async def get_now_playing(
 async def channel_events(
     channel_id: int,
     request: Request,
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -140,18 +174,27 @@ async def channel_events(
         )
 
     queue = channel_engine.subscribe(channel_id)
+    bind = session.get_bind()
+    token = _request_session_token(session_cookie, authorization)
+    user_id = user.id
 
     async def event_stream():
+        keep_alive = 0.0
         try:
             while True:
                 if await request.is_disconnected():
                     break
+                if not _live_user_is_valid(bind, token, user_id, channel_id):
+                    break
                 try:
-                    revision = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    revision = await asyncio.wait_for(queue.get(), timeout=1.0)
                     yield f"event: channel-update\ndata: {revision}\n\n"
+                    keep_alive = 0.0
                 except asyncio.TimeoutError:
-                    # Keep intermediaries from closing an otherwise idle SSE stream.
-                    yield ": keep-alive\n\n"
+                    keep_alive += 1.0
+                    if keep_alive >= 15.0:
+                        yield ": keep-alive\n\n"
+                        keep_alive = 0.0
         finally:
             channel_engine.unsubscribe(channel_id, queue)
 

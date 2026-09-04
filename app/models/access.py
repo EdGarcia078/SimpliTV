@@ -30,15 +30,15 @@ class GroupChannelAccess(SQLModel, table=True):
 
 
 class AccessGroupCreate(SQLModel):
-    name: str
-    user_ids: list[int] = Field(default_factory=list)
-    channel_ids: list[int] = Field(default_factory=list)
+    name: str = Field(min_length=1, max_length=80)
+    user_ids: list[int] = Field(default_factory=list, max_length=10000)
+    channel_ids: list[int] = Field(default_factory=list, max_length=10000)
 
 
 class AccessGroupUpdate(SQLModel):
-    name: Optional[str] = None
-    user_ids: Optional[list[int]] = None
-    channel_ids: Optional[list[int]] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    user_ids: Optional[list[int]] = Field(default=None, max_length=10000)
+    channel_ids: Optional[list[int]] = Field(default=None, max_length=10000)
 
 
 class AccessGroupRead(SQLModel):

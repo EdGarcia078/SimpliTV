@@ -9,7 +9,7 @@ from sqlmodel import Session, func, select
 
 from app.api.deps import get_current_admin
 from app.api.media import to_media_item_read
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_new_password
 from app.db.session import get_session
 from app.models.channel import Channel, ChannelRead
 from app.models.access import (AccessGroup, AccessGroupCreate, AccessGroupRead, AccessGroupUpdate, GroupChannelAccess, UserAccessGroup)
@@ -270,6 +270,7 @@ def list_users(session: Session = Depends(get_session)) -> List[UserRead]:
             username=u.username,
             role=u.role,
             is_active=u.is_active,
+            must_change_password=u.must_change_password,
             created_at=u.created_at,
             last_login_at=u.last_login_at,
         )
@@ -296,11 +297,13 @@ def create_user(
             detail="El nombre de usuario debe tener al menos 3 caracteres.",
         )
 
-    if len(user_in.password) < 6:
+    try:
+        validate_new_password(user_in.password)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La contraseña debe tener al menos 6 caracteres.",
-        )
+            detail=str(exc),
+        ) from exc
 
     existing = session.exec(select(User).where(User.username == username)).first()
     if existing:
@@ -344,6 +347,7 @@ def create_user(
         username=new_user.username,
         role=new_user.role,
         is_active=new_user.is_active,
+        must_change_password=new_user.must_change_password,
         created_at=new_user.created_at,
         last_login_at=new_user.last_login_at,
     )
@@ -414,6 +418,7 @@ def update_user(
         username=target_user.username,
         role=target_user.role,
         is_active=target_user.is_active,
+        must_change_password=target_user.must_change_password,
         created_at=target_user.created_at,
         last_login_at=target_user.last_login_at,
     )
@@ -426,11 +431,13 @@ def reset_password(
     session: Session = Depends(get_session),
 ):
     """Reset password for a user."""
-    if len(req.new_password) < 6:
+    try:
+        validate_new_password(req.new_password)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La nueva contraseña debe tener al menos 6 caracteres.",
-        )
+            detail=str(exc),
+        ) from exc
 
     target_user = session.get(User, user_id)
     if not target_user:
@@ -440,6 +447,7 @@ def reset_password(
         )
 
     target_user.password_hash = hash_password(req.new_password)
+    target_user.must_change_password = False
     session.add(target_user)
 
     active_sessions = session.exec(

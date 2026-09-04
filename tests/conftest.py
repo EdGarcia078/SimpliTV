@@ -8,13 +8,28 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.core.security import SESSION_COOKIE_NAME, generate_session_token, get_session_expiry, hash_password
+from app.core.security import (
+    SESSION_COOKIE_NAME,
+    generate_session_token,
+    get_session_absolute_expiry,
+    get_session_expiry,
+    hash_password,
+    session_token_key,
+)
+from app.core.request_security import login_rate_limiter
 from app.db.session import get_session
 from app.models.user import User, UserSession
 from app.models.access import AccessGroup, GroupChannelAccess, UserAccessGroup
 from app.models.channel import Channel
 from app.services.channel import channel_engine
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def reset_login_limiter():
+    login_rate_limiter.reset()
+    yield
+    login_rate_limiter.reset()
 
 
 @pytest.fixture(scope="session")
@@ -136,10 +151,12 @@ def client(test_db, sample_media_dir, admin_user):
     app.dependency_overrides[get_session] = override_get_session
 
     token = generate_session_token()
+    absolute_expiry = get_session_absolute_expiry()
     session_rec = UserSession(
-        session_token=token,
+        session_token=session_token_key(token),
         user_id=admin_user.id,  # type: ignore
-        expires_at=get_session_expiry(),
+        expires_at=get_session_expiry(absolute_expiry=absolute_expiry),
+        absolute_expires_at=absolute_expiry,
     )
     test_db.add(session_rec)
     test_db.commit()
@@ -158,10 +175,12 @@ def auth_client(test_db, sample_media_dir, normal_user):
     app.dependency_overrides[get_session] = override_get_session
 
     token = generate_session_token()
+    absolute_expiry = get_session_absolute_expiry()
     session_rec = UserSession(
-        session_token=token,
+        session_token=session_token_key(token),
         user_id=normal_user.id,  # type: ignore
-        expires_at=get_session_expiry(),
+        expires_at=get_session_expiry(absolute_expiry=absolute_expiry),
+        absolute_expires_at=absolute_expiry,
     )
     test_db.add(session_rec)
     test_db.commit()
@@ -189,10 +208,12 @@ def admin_client(test_db, sample_media_dir, admin_user):
     app.dependency_overrides[get_session] = override_get_session
 
     token = generate_session_token()
+    absolute_expiry = get_session_absolute_expiry()
     session_rec = UserSession(
-        session_token=token,
+        session_token=session_token_key(token),
         user_id=admin_user.id,  # type: ignore
-        expires_at=get_session_expiry(),
+        expires_at=get_session_expiry(absolute_expiry=absolute_expiry),
+        absolute_expires_at=absolute_expiry,
     )
     test_db.add(session_rec)
     test_db.commit()
