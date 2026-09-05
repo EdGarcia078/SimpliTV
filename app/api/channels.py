@@ -3,7 +3,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
-from app.api.deps import _find_valid_user_session, get_current_user
+from app.api.deps import (
+    _find_valid_user_session,
+    get_current_user,
+    get_current_user_for_streaming,
+)
 from app.core.security import SESSION_COOKIE_NAME
 from app.db.session import get_session
 from app.models.channel import Channel, ChannelRead, NowPlayingResponse
@@ -84,8 +88,8 @@ async def catalog_events(
     request: Request,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
     authorization: Optional[str] = Header(None),
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user_for_streaming),
+    session: Session = Depends(get_session, scope="function"),
 ):
     """Publish a lightweight revision whenever the filesystem catalog changes."""
     bind = session.get_bind()
@@ -154,8 +158,8 @@ async def channel_events(
     request: Request,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
     authorization: Optional[str] = Header(None),
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user_for_streaming),
+    session: Session = Depends(get_session, scope="function"),
 ):
     """
     Server-Sent Events stream used to tell viewers that the channel state changed.

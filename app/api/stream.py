@@ -3,7 +3,11 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
 from sqlmodel import Session
 
-from app.api.deps import _find_valid_user_session, get_current_user
+from app.api.deps import (
+    _find_valid_user_session,
+    get_current_user,
+    get_current_user_for_streaming,
+)
 from app.core.security import SESSION_COOKIE_NAME
 from app.db.session import get_session
 from app.models.channel import Channel
@@ -88,8 +92,8 @@ async def stream_episode(
     range: Optional[str] = Header(None),
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
     authorization: Optional[str] = Header(None),
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user_for_streaming),
+    session: Session = Depends(get_session, scope="function"),
 ):
     """Stream authorized video with Range support and live access revocation."""
     episode = session.get(MediaItem, episode_id)

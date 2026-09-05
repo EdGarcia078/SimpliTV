@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from app.api.deps import (
     _find_valid_user_session,
     get_current_user,
+    get_current_user_for_streaming,
     get_current_user_unrestricted,
 )
 from app.core.config import settings
@@ -313,8 +314,8 @@ def change_default_password(
 async def access_events(
     request: Request,
     session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user_for_streaming),
+    session: Session = Depends(get_session, scope="function"),
 ):
     """Push an SSE event whenever this account's channel authorization changes."""
     bind = session.get_bind()

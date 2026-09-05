@@ -67,12 +67,12 @@ def _find_valid_user_session(db: Session, token: str) -> Optional[UserSession]:
     return user_session
 
 
-def get_current_user_optional(
-    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_session),
+def _resolve_current_user(
+    session_cookie: Optional[str],
+    authorization: Optional[str],
+    db: Session,
 ) -> Optional[User]:
-    """Return the active user for a cookie/Bearer session, or ``None``."""
+    """Resolve an active user from a cookie/Bearer token using ``db``."""
     token = session_cookie
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:].strip()
@@ -91,10 +91,32 @@ def get_current_user_optional(
     return user
 
 
-def get_current_user_unrestricted(
-    user: Optional[User] = Depends(get_current_user_optional),
-) -> User:
-    """Require authentication but allow the mandatory first-password-change flow."""
+def get_current_user_optional(
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_session),
+) -> Optional[User]:
+    """Return the active user for a cookie/Bearer session, or ``None``."""
+    return _resolve_current_user(session_cookie, authorization, db)
+
+
+def get_current_user_optional_for_streaming(
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_session, scope="function"),
+) -> Optional[User]:
+    """Authenticate a long-lived response without pinning a pool connection.
+
+    FastAPI normally keeps ``yield`` dependencies alive until a streaming response
+    finishes.  SSE and video responses can live for minutes or hours, so their
+    request session must instead be closed immediately after the endpoint builds
+    the response.  Periodic live authorization checks open their own short-lived
+    sessions when needed.
+    """
+    return _resolve_current_user(session_cookie, authorization, db)
+
+
+def _require_authenticated_user(user: Optional[User]) -> User:
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -104,10 +126,7 @@ def get_current_user_unrestricted(
     return user
 
 
-def get_current_user(
-    user: User = Depends(get_current_user_unrestricted),
-) -> User:
-    """Require an active account that has completed first-run password setup."""
+def _require_password_setup(user: User) -> User:
     if user.must_change_password:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -115,6 +134,34 @@ def get_current_user(
             headers={"X-SimpliTV-Password-Change-Required": "1"},
         )
     return user
+
+
+def get_current_user_unrestricted(
+    user: Optional[User] = Depends(get_current_user_optional),
+) -> User:
+    """Require authentication but allow the mandatory first-password-change flow."""
+    return _require_authenticated_user(user)
+
+
+def get_current_user(
+    user: User = Depends(get_current_user_unrestricted),
+) -> User:
+    """Require an active account that has completed first-run password setup."""
+    return _require_password_setup(user)
+
+
+def get_current_user_unrestricted_for_streaming(
+    user: Optional[User] = Depends(get_current_user_optional_for_streaming),
+) -> User:
+    """Streaming equivalent of :func:`get_current_user_unrestricted`."""
+    return _require_authenticated_user(user)
+
+
+def get_current_user_for_streaming(
+    user: User = Depends(get_current_user_unrestricted_for_streaming),
+) -> User:
+    """Authenticate long-lived responses with a function-scoped DB session."""
+    return _require_password_setup(user)
 
 
 def get_current_admin(
