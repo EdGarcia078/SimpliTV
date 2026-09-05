@@ -42,6 +42,7 @@ def create_db_and_tables() -> None:
     _migrate_session_security_fields()
     _migrate_channel_start_mode()
     _migrate_channel_folder_name()
+    _migrate_channel_display_order()
     _migrate_episode_media_fields()
     _migrate_episode_title_field()
     _migrate_media_file_mtime()
@@ -175,6 +176,31 @@ def _migrate_channel_folder_name() -> None:
             "UPDATE channels SET folder_name = name WHERE folder_name IS NULL"
         )
 
+
+
+def _migrate_channel_display_order() -> None:
+    """Add and deterministically initialize the persistent channel order."""
+    inspector = inspect(engine)
+    if "channels" not in set(inspector.get_table_names()):
+        return
+    columns = {column["name"] for column in inspector.get_columns("channels")}
+    with engine.begin() as connection:
+        if "display_order" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE channels ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0"
+            )
+        rows = connection.exec_driver_sql(
+            "SELECT id, display_order FROM channels ORDER BY id"
+        ).fetchall()
+        if rows and any(int(row[1] or 0) <= 0 for row in rows):
+            for position, (channel_id, _order) in enumerate(rows, start=1):
+                connection.exec_driver_sql(
+                    "UPDATE channels SET display_order = ? WHERE id = ?",
+                    (position, channel_id),
+                )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_channels_display_order ON channels (display_order)"
+        )
 
 def _migrate_episode_media_fields() -> None:
     inspector = inspect(engine)

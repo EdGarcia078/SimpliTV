@@ -55,7 +55,7 @@ def build_user_access_snapshot(session: Session, user: User) -> dict:
     relevant_ids = set(granted_channel_ids)
     if relevant_ids:
         relevant_channels = session.exec(
-            select(Channel).where(Channel.id.in_(relevant_ids)).order_by(Channel.id)
+            select(Channel).where(Channel.id.in_(relevant_ids)).order_by(Channel.display_order, Channel.id)
         ).all()
     else:
         relevant_channels = []

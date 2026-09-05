@@ -186,10 +186,15 @@ def _get_or_create_channel(session: Session, channel_folder: str, channel_name: 
                 f"El nombre de canal '{channel_name}' definido en channel.yaml "
                 f"ya está en uso por la carpeta '{name_conflict.folder_name}'."
             )
+        next_display_order = max(
+            (candidate.display_order for candidate in session.exec(select(Channel)).all()),
+            default=0,
+        ) + 1
         channel = Channel(
             id=_allocate_channel_id(session),
             name=channel_name,
             folder_name=channel_folder,
+            display_order=next_display_order,
         )
         session.add(channel)
         session.flush()
@@ -515,6 +520,19 @@ def prune_missing_channel_config_references(channel_dir: Path) -> bool:
     return changed
 
 
+def compact_channel_display_order(session: Session) -> None:
+    """Keep presentation positions contiguous without touching durable IDs."""
+    channels = session.exec(select(Channel).order_by(Channel.display_order, Channel.id)).all()
+    changed = False
+    for position, channel in enumerate(channels, start=1):
+        if channel.display_order != position:
+            channel.display_order = position
+            session.add(channel)
+            changed = True
+    if changed:
+        session.flush()
+
+
 def _delete_channel_relations(session: Session, channel_id: int) -> None:
     state = session.get(ChannelState, channel_id)
     if state is not None:
@@ -797,6 +815,7 @@ def remove_episode_by_path(
                 _delete_channel_relations(session, channel_id)
                 if channel is not None:
                     session.delete(channel)
+        compact_channel_display_order(session)
         bump_library_revision(session)
         session.commit()
         logger.info("Removed deleted media from index: %s", rel_path)
@@ -1006,6 +1025,8 @@ async def _scan_library_unlocked(session: Session, media_dir: Optional[Path] = N
         _delete_channel_relations(session, channel.id)
         session.delete(channel)
         channels_deleted += 1
+
+    compact_channel_display_order(session)
 
     changed = bool(
         added_count

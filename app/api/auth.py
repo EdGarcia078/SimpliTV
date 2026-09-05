@@ -138,7 +138,7 @@ def _viewer_preferences_payload(session: Session, user: User) -> dict:
         channels = []
     else:
         channels = session.exec(
-            select(Channel).where(Channel.id.in_(granted_ids)).order_by(Channel.id)
+            select(Channel).where(Channel.id.in_(granted_ids)).order_by(Channel.display_order, Channel.id)
         ).all()
 
     if not preference.sensitive_content_enabled:

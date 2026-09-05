@@ -17,6 +17,8 @@ class Channel(SQLModel, table=True):
     start_mode: str = Field(default="any")
     loop: bool = Field(default=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Global presentation order. Independent from the durable channel identity.
+    display_order: int = Field(default=0, index=True)
 
 
 class ChannelIdentityCounter(SQLModel, table=True):

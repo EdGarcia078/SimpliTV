@@ -93,6 +93,10 @@ async def update_and_restart_system():
 # SCHEMAS ADMINISTRATIVOS DE CANALES
 # ==========================================================
 
+class ChannelOrderUpdate(BaseModel):
+    channel_ids: list[int] = Field(min_length=1)
+
+
 class ChannelSettingsUpdate(BaseModel):
     batch_size: int = Field(ge=1, le=100)
     start_mode: Literal["any", "even", "odd"]
@@ -898,7 +902,7 @@ async def stop_library_optimization_job(job_id: int):
 @router.get("/channels", response_model=List[ChannelRead], summary="List All Channels for Admin")
 def list_admin_channels(session: Session = Depends(get_session)) -> List[ChannelRead]:
     """Return every channel for administration, independent of viewer filters."""
-    channels = session.exec(select(Channel).order_by(Channel.id)).all()
+    channels = session.exec(select(Channel).order_by(Channel.display_order, Channel.id)).all()
     result: list[ChannelRead] = []
     for channel in channels:
         channel_dir = get_channel_dir(channel.folder_name, channel.name)
@@ -919,6 +923,27 @@ def list_admin_channels(session: Session = Depends(get_session)) -> List[Channel
         else:
             result.append(ChannelRead.model_validate(channel))
     return result
+
+@router.put("/channels/order", response_model=List[ChannelRead], summary="Reorder Channels")
+def reorder_channels(payload: ChannelOrderUpdate, session: Session = Depends(get_session)) -> List[ChannelRead]:
+    """Persist one complete channel ordering atomically and publish a catalog revision."""
+    channels = session.exec(select(Channel).order_by(Channel.display_order, Channel.id)).all()
+    existing_ids = [channel.id for channel in channels]
+    requested_ids = payload.channel_ids
+    if len(requested_ids) != len(set(requested_ids)):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La lista contiene canales duplicados.")
+    if set(requested_ids) != set(existing_ids):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La lista debe contener exactamente todos los canales registrados.")
+    by_id = {channel.id: channel for channel in channels}
+    for position, channel_id in enumerate(requested_ids, start=1):
+        channel = by_id[channel_id]
+        channel.display_order = position
+        session.add(channel)
+    bump_library_revision(session)
+    session.commit()
+    ordered = [by_id[channel_id] for channel_id in requested_ids]
+    return [ChannelRead.model_validate(channel) for channel in ordered]
+
 
 @router.get(
     "/channels/{channel_id}/now-playing",

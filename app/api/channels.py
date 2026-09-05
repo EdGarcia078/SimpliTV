@@ -69,8 +69,8 @@ async def list_channels(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> List[ChannelRead]:
-    """Returns a list of all broadcasting channels, ordered by id."""
-    stmt = select(Channel).order_by(Channel.id)
+    """Returns a list of all broadcasting channels, ordered by display order."""
+    stmt = select(Channel).order_by(Channel.display_order, Channel.id)
     allowed = get_player_channel_ids(session, user)
     if not allowed:
         return []

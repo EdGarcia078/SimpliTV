@@ -11,6 +11,7 @@
   let catalogEventSource = null;
   let catalogRefreshInFlight = false;
   let catalogRefreshQueued = false;
+  let channelOrderSaveInFlight = false;
 
   // =========================================================
   // UTILIDADES
@@ -149,7 +150,7 @@
       tbody.innerHTML = `
         <tr>
           <td
-            colspan="6"
+            colspan="7"
             style="text-align:center; color:var(--text-muted);"
           >
             Cargando canales...
@@ -812,7 +813,7 @@
           tbody.innerHTML = `
             <tr>
               <td
-                colspan="6"
+                colspan="7"
                 style="text-align:center; color:var(--danger);"
               >
                 ${escapeHtml(message)}
@@ -859,7 +860,7 @@
         tbody.innerHTML = `
           <tr>
             <td
-              colspan="6"
+              colspan="7"
               style="text-align:center; color:var(--danger);"
             >
               Error de conexión al cargar los canales.
@@ -974,7 +975,7 @@
     if (!channels.length) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="6" style="text-align:center; color:var(--text-muted);">
+          <td colspan="7" style="text-align:center; color:var(--text-muted);">
             No hay canales registrados.
           </td>
         </tr>`;
@@ -989,8 +990,10 @@
         ? `${channel.schedule_slots} franja(s)`
         : 'Sin franjas';
       const tr = document.createElement('tr');
-
+      tr.dataset.channelId = String(channel.id);
+      tr.className = 'channel-row';
       tr.innerHTML = `
+        <td class="channel-drag-cell"><button type="button" class="channel-drag-handle" aria-label="Reordenar ${escapeHtml(channel.name)}" title="Arrastrar para reordenar">☰</button></td>
         <td>${channel.id}</td>
         <td><strong>${escapeHtml(channel.name)}</strong>${channel.sensitive_content ? ' <span class="badge-tag">Sensible</span>' : ''}</td>
         <td>${escapeHtml(channel.folder_name || channel.name)}</td>
@@ -1001,11 +1004,81 @@
             ⚙ Administrar
           </button>
         </td>`;
-
       tbody.appendChild(tr);
     });
 
     attachChannelActionListeners();
+    attachChannelReorder(tbody);
+  }
+
+  function attachChannelReorder(tbody) {
+    let dragging = null;
+    let pointerId = null;
+
+    const clear = () => {
+      if (dragging) dragging.classList.remove('channel-row-dragging');
+      tbody.querySelectorAll('.channel-row-drop-target').forEach((row) => row.classList.remove('channel-row-drop-target'));
+      dragging = null;
+      pointerId = null;
+    };
+
+    const save = async () => {
+      if (channelOrderSaveInFlight) return;
+      const ids = Array.from(tbody.querySelectorAll('tr[data-channel-id]')).map((row) => Number(row.dataset.channelId));
+      const previous = channelsCache.map((channel) => Number(channel.id));
+      if (ids.length !== previous.length || ids.every((id, index) => id === previous[index])) return;
+      channelOrderSaveInFlight = true;
+      try {
+        const res = await fetch('/api/admin/channels/order', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ channel_ids: ids }),
+        });
+        if (handleAuthFailure(res)) return;
+        if (!res.ok) {
+          const data = await readResponseData(res);
+          throw new Error(getErrorMessage(data, 'No se pudo guardar el orden de los canales.'));
+        }
+        channelsCache = await res.json();
+        renderChannelsTable(channelsCache);
+        populateDashboardChannelSelector(channelsCache, currentDashboardChannelId);
+      } catch (err) {
+        console.error('Error saving channel order:', err);
+        alert(err.message || 'No se pudo guardar el orden de los canales.');
+        renderChannelsTable(channelsCache);
+      } finally {
+        channelOrderSaveInFlight = false;
+      }
+    };
+
+    tbody.querySelectorAll('.channel-drag-handle').forEach((handle) => {
+      handle.addEventListener('pointerdown', (event) => {
+        if (channelOrderSaveInFlight) return;
+        event.preventDefault();
+        dragging = handle.closest('tr[data-channel-id]');
+        if (!dragging) return;
+        pointerId = event.pointerId;
+        handle.setPointerCapture?.(pointerId);
+        dragging.classList.add('channel-row-dragging');
+      });
+      handle.addEventListener('pointermove', (event) => {
+        if (!dragging || pointerId !== event.pointerId) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('tr[data-channel-id]');
+        tbody.querySelectorAll('.channel-row-drop-target').forEach((row) => row.classList.remove('channel-row-drop-target'));
+        if (!target || target === dragging || !tbody.contains(target)) return;
+        target.classList.add('channel-row-drop-target');
+        const rect = target.getBoundingClientRect();
+        if (event.clientY < rect.top + rect.height / 2) tbody.insertBefore(dragging, target);
+        else tbody.insertBefore(dragging, target.nextSibling);
+      });
+      handle.addEventListener('pointerup', async (event) => {
+        if (pointerId !== event.pointerId) return;
+        clear();
+        await save();
+      });
+      handle.addEventListener('pointercancel', () => clear());
+    });
   }
 
   function attachChannelActionListeners() {
