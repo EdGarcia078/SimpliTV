@@ -245,6 +245,16 @@ El acceso doméstico mediante `http://<IP_LOCAL>:8000` sigue soportado por defec
 
 Consulta [SECURITY.md](SECURITY.md) para el modelo de amenazas, proxies confiables, sesiones, permisos y recomendaciones de despliegue.
 
+### Instalación como PWA
+
+SimpliTV incluye un Web App Manifest y un service worker, por lo que puede instalarse como aplicación desde navegadores compatibles. La PWA usa `display: standalone`, iconos dedicados de 192×192 y 512×512 y una variante `maskable` para sistemas que aplican máscaras al icono.
+
+La instalación es siempre voluntaria. SimpliTV evita prompts automáticos y ofrece la acción desde **Cuenta → Aplicación** en el reproductor, disponible tanto para administradores como para espectadores. Si el navegador soporta instalación programática, el diálogo nativo solo se abre después de pulsar **Instalar SimpliTV**; en otros navegadores la ayuda manual queda detrás del botón de información.
+
+La caché del service worker está limitada intencionalmente a archivos estáticos versionados (`/static/...?...`). Las páginas HTML autenticadas, `/api/`, los streams y las peticiones `Range` nunca se guardan en Cache Storage. Cuando cambia la versión de los assets, se crea una caché nueva y la anterior se elimina al activarse el nuevo service worker.
+
+El sitio web continúa funcionando por `http://<IP_LOCAL>:8000`. Si el dispositivo accede por HTTP, la sección de instalación lo detecta y muestra **HTTPS requerido** sin afectar al resto de la aplicación. Los navegadores solo permiten registrar service workers e instalar la PWA desde un contexto seguro; cada despliegue puede proporcionar HTTPS mediante Caddy, Nginx, Cloudflare, otro reverse proxy o la infraestructura que prefiera.
+
 ### Actualización desde el panel administrativo
 
 El encabezado del panel comprueba periódicamente si la rama local `main` está

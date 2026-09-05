@@ -40,6 +40,10 @@
   const blockedChannelsList = document.getElementById('blocked-channels-list');
   const channelSettingsMessage = document.getElementById('channel-settings-message');
   const btnSensitiveToggle = document.getElementById('btn-sensitive-toggle');
+  const pwaInstallState = document.getElementById('pwa-install-state');
+  const btnInstallPwa = document.getElementById('btn-install-pwa');
+  const btnPwaInstallInfo = document.getElementById('btn-pwa-install-info');
+  const pwaInstallHelp = document.getElementById('pwa-install-help');
   const settingsLogout = document.getElementById('settings-logout');
   const unmuteBanner = document.getElementById('unmute-banner');
   const unmuteBtn = document.getElementById('unmute-btn');
@@ -710,6 +714,87 @@
     element.classList.toggle('success', Boolean(message) && type === 'success');
   }
 
+  function getPwaInstallState() {
+    const api = window.SimpliTVPWA;
+    if (api && typeof api.getState === 'function') return api.getState();
+
+    const standalone = Boolean(
+      (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) ||
+      window.navigator?.standalone === true
+    );
+
+    return {
+      secureContext: Boolean(window.isSecureContext),
+      serviceWorkerSupported: 'serviceWorker' in navigator,
+      standalone,
+      canPromptInstall: false,
+      platform: 'desktop',
+    };
+  }
+
+  function pwaInstallHelpText(state) {
+    if (state.standalone) {
+      return 'SimpliTV ya se está ejecutando como aplicación en este dispositivo.';
+    }
+    if (!state.secureContext) {
+      return 'Esta conexión usa HTTP. Para instalar la PWA, abre SimpliTV mediante HTTPS. La versión web seguirá funcionando normalmente por HTTP.';
+    }
+    if (!state.serviceWorkerSupported) {
+      return 'Este navegador no ofrece el soporte necesario para instalar SimpliTV como PWA. Puedes seguir usando la versión web normalmente.';
+    }
+    if (state.platform === 'ios') {
+      return 'En iPhone o iPad, abre el menú Compartir del navegador y selecciona “Añadir a pantalla de inicio”.';
+    }
+    if (state.canPromptInstall) {
+      return 'Pulsa “Instalar SimpliTV”. El navegador mostrará su confirmación nativa solo después de esa acción.';
+    }
+    return 'La instalación depende del navegador. Busca “Instalar SimpliTV”, “Instalar aplicación” o “Añadir a pantalla de inicio” en su menú.';
+  }
+
+  function setPwaInstallHelpVisible(visible) {
+    if (!pwaInstallHelp || !btnPwaInstallInfo) return;
+    const state = getPwaInstallState();
+    pwaInstallHelp.textContent = pwaInstallHelpText(state);
+    pwaInstallHelp.classList.toggle('hidden', !visible);
+    btnPwaInstallInfo.setAttribute('aria-expanded', String(Boolean(visible)));
+  }
+
+  function refreshPwaInstallUI() {
+    if (!pwaInstallState || !btnInstallPwa) return;
+    const state = getPwaInstallState();
+
+    pwaInstallState.classList.remove('ready', 'warning');
+    btnInstallPwa.disabled = false;
+
+    if (state.standalone) {
+      pwaInstallState.textContent = 'Instalada';
+      pwaInstallState.classList.add('ready');
+      btnInstallPwa.textContent = 'Instalada';
+      btnInstallPwa.disabled = true;
+    } else if (!state.secureContext) {
+      pwaInstallState.textContent = 'HTTPS requerido';
+      pwaInstallState.classList.add('warning');
+      btnInstallPwa.textContent = 'Instalar SimpliTV';
+      btnInstallPwa.disabled = true;
+    } else if (!state.serviceWorkerSupported) {
+      pwaInstallState.textContent = 'No compatible';
+      pwaInstallState.classList.add('warning');
+      btnInstallPwa.textContent = 'Instalar SimpliTV';
+      btnInstallPwa.disabled = true;
+    } else if (state.canPromptInstall) {
+      pwaInstallState.textContent = 'Disponible';
+      pwaInstallState.classList.add('ready');
+      btnInstallPwa.textContent = 'Instalar SimpliTV';
+    } else {
+      pwaInstallState.textContent = 'Desde navegador';
+      btnInstallPwa.textContent = 'Cómo instalar';
+    }
+
+    if (pwaInstallHelp && !pwaInstallHelp.classList.contains('hidden')) {
+      pwaInstallHelp.textContent = pwaInstallHelpText(state);
+    }
+  }
+
   function lockChannelPreferences() {
     preferencesPassword = null;
     viewerPreferences = null;
@@ -730,6 +815,8 @@
     if (settingsConfirmPassword) settingsConfirmPassword.value = '';
     setSettingsMessage(profileSettingsMessage);
     lockChannelPreferences();
+    setPwaInstallHelpVisible(false);
+    refreshPwaInstallUI();
     viewerSettings.classList.remove('hidden');
     document.body.style.cursor = 'default';
   }
@@ -926,6 +1013,37 @@
       await updateViewerPreferences({ sensitive_content_enabled: nextValue });
     });
   }
+
+  if (btnInstallPwa) {
+    btnInstallPwa.addEventListener('click', async () => {
+      const state = getPwaInstallState();
+      const api = window.SimpliTVPWA;
+
+      if (!state.canPromptInstall || !api || typeof api.promptInstall !== 'function') {
+        setPwaInstallHelpVisible(true);
+        return;
+      }
+
+      btnInstallPwa.disabled = true;
+      try {
+        const result = await api.promptInstall();
+        if (result?.status === 'manual' || result?.status === 'unavailable') {
+          setPwaInstallHelpVisible(true);
+        }
+      } finally {
+        refreshPwaInstallUI();
+      }
+    });
+  }
+
+  if (btnPwaInstallInfo) {
+    btnPwaInstallInfo.addEventListener('click', () => {
+      const visible = pwaInstallHelp && !pwaInstallHelp.classList.contains('hidden');
+      setPwaInstallHelpVisible(!visible);
+    });
+  }
+
+  window.addEventListener('simplitv:pwa-statechange', refreshPwaInstallUI);
 
   if (btnCloseSettings) btnCloseSettings.addEventListener('click', closeViewerSettings);
   if (viewerSettings) {

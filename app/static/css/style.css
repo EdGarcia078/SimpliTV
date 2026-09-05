@@ -2647,6 +2647,91 @@ a {
   display: none;
 }
 
+.settings-app-section {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.pwa-install-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pwa-install-state {
+  flex: 0 0 auto;
+  margin-top: 0.05rem;
+  padding: 0.32rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pwa-install-state.ready {
+  border-color: rgba(46, 213, 115, 0.24);
+  background: rgba(46, 213, 115, 0.07);
+  color: #71e89f;
+}
+
+.pwa-install-state.warning {
+  border-color: rgba(255, 184, 77, 0.25);
+  background: rgba(255, 184, 77, 0.08);
+  color: #ffd08a;
+}
+
+.pwa-install-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.pwa-install-button {
+  min-width: 150px;
+}
+
+.pwa-install-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pwa-info-button {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pwa-info-button:hover,
+.pwa-info-button[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.pwa-install-help {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .settings-session-section {
   display: flex;
   justify-content: flex-end;
@@ -2703,6 +2788,19 @@ a {
 
   .settings-section-actions .btn-primary {
     width: 100%;
+  }
+
+  .pwa-install-heading {
+    align-items: center;
+  }
+
+  .pwa-install-actions {
+    width: 100%;
+  }
+
+  .pwa-install-button {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 }
 

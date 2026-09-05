@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlmodel import Session
@@ -15,6 +15,7 @@ from app.db.session import create_db_and_tables, engine
 from app.models.user import User
 from app.services.channel import channel_engine
 from app.services.client_assets import STATIC_DIR, client_page, static_cache_control
+from app.services.pwa import service_worker_script, web_app_manifest
 from app.services.runtime_version import runtime_version
 from app.services.scanner import scan_library
 from app.services.watcher import media_watcher
@@ -145,6 +146,29 @@ async def security_policy(request: Request, call_next):
         )
 
     return _apply_security_headers(response)
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def serve_web_app_manifest():
+    """Serve fresh PWA install metadata without persisting private state."""
+    return JSONResponse(
+        web_app_manifest(),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache, max-age=0, must-revalidate"},
+    )
+
+
+@app.get("/service-worker.js", include_in_schema=False)
+def serve_service_worker():
+    """Serve the root-scoped, deployment-aware PWA service worker."""
+    return Response(
+        service_worker_script(),
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-store",
+            "Service-Worker-Allowed": "/",
+        },
+    )
 
 
 @app.get("/api/health", tags=["Health"], summary="Health check")

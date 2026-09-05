@@ -24,6 +24,9 @@ def test_client_pages_are_automatically_versioned(client, unauth_client):
         assert response.headers["cache-control"] == "no-cache, max-age=0, must-revalidate"
         assert f'name="simplitv-deployment" content="{runtime_version.deployment_id}"' in response.text
         assert f'/static/js/version-watch.js?v={runtime_version.asset_version}' in response.text
+        assert f'/static/js/pwa.js?v={runtime_version.asset_version}' in response.text
+        assert 'rel="manifest" href="/manifest.webmanifest"' in response.text
+        assert f'/static/icons/apple-touch-icon.png?v={runtime_version.asset_version}' in response.text
 
     assert f'/static/css/style.css?v={runtime_version.asset_version}' in index.text
     assert f'/static/js/player.js?v={runtime_version.asset_version}' in index.text
@@ -69,6 +72,8 @@ def test_renderer_versions_all_current_html_shells():
         rendered = render_client_page(filename)
         assert f'name="simplitv-deployment" content="{runtime_version.deployment_id}"' in rendered
         assert f'/static/js/version-watch.js?v={runtime_version.asset_version}' in rendered
+        assert f'/static/js/pwa.js?v={runtime_version.asset_version}' in rendered
+        assert 'rel="manifest" href="/manifest.webmanifest"' in rendered
         assert '/static/css/style.css"' not in rendered
 
     assert static_cache_control(runtime_version.asset_version) == (

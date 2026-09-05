@@ -38,6 +38,13 @@ def render_client_page(filename: str) -> str:
     html = (STATIC_DIR / filename).read_text(encoding="utf-8")
     deployment_bootstrap = (
         f'<meta name="simplitv-deployment" content="{runtime_version.deployment_id}" />\n'
+        '<meta name="theme-color" content="#08090d" />\n'
+        '<meta name="apple-mobile-web-app-capable" content="yes" />\n'
+        '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />\n'
+        '<meta name="apple-mobile-web-app-title" content="SimpliTV" />\n'
+        '<link rel="manifest" href="/manifest.webmanifest" />\n'
+        '<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />\n'
+        '<script src="/static/js/pwa.js" defer></script>\n'
         '<script src="/static/js/version-watch.js" defer></script>\n'
     )
 
