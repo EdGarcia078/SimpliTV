@@ -3592,7 +3592,7 @@
       const movieCount = Array.from(channel.franchises.values()).reduce((sum, movies) => sum + movies.length, 0) + channel.standaloneMovies.length;
 
       return `
-        <details class="library-channel" ${channels.length === 1 || channelIndex === 0 ? 'open' : ''}>
+        <details class="library-channel">
           <summary class="library-channel-summary">
             <div class="library-channel-heading">
               <span class="library-channel-icon">📡</span>
