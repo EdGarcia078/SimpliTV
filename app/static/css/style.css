@@ -30,7 +30,7 @@ html, body {
 
 /* Consistent native selects across Chromium (including Brave) and Firefox. */
 select {
-  color-scheme: dark;
+  color-scheme: only dark;
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
@@ -69,12 +69,35 @@ select:disabled {
 
 select option,
 select optgroup {
+  color-scheme: only dark;
+  forced-color-adjust: none;
   color: var(--text-main);
   background-color: #181b25;
 }
 
 select option:disabled {
   color: var(--text-muted);
+}
+
+/* Firefox/LibreWolf repaint the active option when the pointer leaves the
+   native popup. Define every transient state to prevent a light-theme flash. */
+select option:hover,
+select option:focus {
+  color: #ffffff !important;
+  background-color: #2a2f3f !important;
+  background-image: linear-gradient(#2a2f3f, #2a2f3f) !important;
+}
+
+select option:checked {
+  color: #ffffff !important;
+  background-color: #c93443 !important;
+  background-image: linear-gradient(#c93443, #c93443) !important;
+}
+
+select option:checked:hover,
+select option:checked:focus {
+  background-color: var(--primary-accent) !important;
+  background-image: linear-gradient(var(--primary-accent), var(--primary-accent)) !important;
 }
 
 /* ==========================================
