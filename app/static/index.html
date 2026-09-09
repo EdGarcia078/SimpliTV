@@ -56,8 +56,23 @@
         <div class="osd-top">
           <div class="channel-badge">
             <span class="live-dot"></span>
-            <select id="channel-selector" class="channel-selector" style="display: none;">
-            </select>
+            <select id="channel-selector" class="channel-selector-native" tabindex="-1" aria-hidden="true" hidden></select>
+            <div id="channel-select" class="channel-select hidden">
+              <button
+                id="channel-select-button"
+                class="channel-select-button"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="channel-select-menu"
+              >
+                <span id="channel-select-label" class="channel-select-label">Seleccionar canal</span>
+                <svg class="channel-select-chevron" viewBox="0 0 12 8" width="12" height="8" aria-hidden="true">
+                  <path d="M1.41.59 6 5.17 10.59.59 12 2l-6 6-6-6z"/>
+                </svg>
+              </button>
+              <div id="channel-select-menu" class="channel-select-menu hidden" role="listbox" tabindex="-1" aria-labelledby="channel-select-button"></div>
+            </div>
             <span id="channel-name-display" class="channel-name">SIMPLITV EN VIVO</span>
           </div>
           <div class="osd-actions">

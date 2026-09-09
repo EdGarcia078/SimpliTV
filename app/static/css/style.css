@@ -174,43 +174,126 @@ video#tv-player {
   letter-spacing: 0.08em;
 }
 
-.channel-selector {
-  display: inline-block;
+.channel-selector-native {
+  display: none !important;
+}
+
+.channel-select {
   pointer-events: auto;
   position: relative;
   z-index: 20;
-
   min-width: 150px;
-  width: auto;
-  height: auto;
+  max-width: min(360px, 55vw);
+  letter-spacing: normal;
+}
 
+.channel-select-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
   background-color: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(12px);
-
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 999px;
-
-  padding: 0.4rem 2.2rem 0.4rem 0.9rem;
-
+  padding: 0.4rem 0.75rem 0.4rem 0.9rem;
   color: #fff;
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 700;
-
   cursor: pointer;
   outline: none;
-
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
+  transition: background-color 0.2s ease, border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
-.channel-selector:hover {
+.channel-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-select-chevron {
+  flex: 0 0 auto;
+  fill: currentColor;
+  transition: transform 0.2s ease;
+}
+
+.channel-select.open .channel-select-chevron {
+  transform: rotate(180deg);
+}
+
+.channel-select-button:hover,
+.channel-select.open .channel-select-button {
   background-color: rgba(255, 255, 255, 0.18);
 }
 
-.channel-selector:focus {
+.channel-select-button:focus-visible,
+.channel-select.open .channel-select-button {
   border-color: var(--primary-accent);
+  box-shadow: 0 0 0 3px rgba(255, 71, 87, 0.2);
+}
+
+.channel-select-menu {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  left: 0;
+  z-index: 100;
+  display: grid;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(360px, calc(100vw - 2rem));
+  max-height: min(360px, 55vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.35rem;
+  background: rgba(18, 20, 28, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(16px);
+}
+
+.channel-select-menu.hidden {
+  display: none;
+}
+
+.channel-select-option {
+  display: block;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  overflow: hidden;
+  color: var(--text-main);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+}
+
+.channel-select-option:hover,
+.channel-select-option:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.channel-select-option.selected {
+  color: #fff;
+  background: rgba(255, 71, 87, 0.22);
+}
+
+.channel-select-option.selected:hover,
+.channel-select-option.selected:focus-visible {
+  background: rgba(255, 71, 87, 0.34);
 }
 
 .live-dot {
@@ -1565,10 +1648,13 @@ a {
     white-space: nowrap;
   }
 
-  .channel-selector {
+  .channel-select {
     min-width: 0;
     width: 100%;
     max-width: 100%;
+  }
+
+  .channel-select-button {
     padding-top: 0.5rem;
     padding-bottom: 0.5rem;
     font-size: 0.82rem;
@@ -2120,7 +2206,7 @@ a {
     flex: 0 1 auto;
   }
 
-  .channel-selector {
+  .channel-select {
     max-width: 180px;
   }
 

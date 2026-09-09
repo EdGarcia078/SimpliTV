@@ -23,6 +23,10 @@
   const btnChannelNext = document.getElementById('btn-channel-next');
   const btnAdminLink = document.getElementById('btn-admin-link');
   const channelSelector = document.getElementById('channel-selector');
+  const channelSelect = document.getElementById('channel-select');
+  const channelSelectButton = document.getElementById('channel-select-button');
+  const channelSelectLabel = document.getElementById('channel-select-label');
+  const channelSelectMenu = document.getElementById('channel-select-menu');
   const channelNameDisplay = document.getElementById('channel-name-display');
   const btnAccount = document.getElementById('btn-account');
   const viewerSettings = document.getElementById('viewer-settings');
@@ -182,11 +186,83 @@
     document.body.style.cursor = 'default';
     clearTimeout(osdTimer);
     osdTimer = setTimeout(() => {
-      if (!video.paused) {
+      if (!video.paused && !isChannelSelectOpen()) {
         osdOverlay.classList.add('hidden');
         document.body.style.cursor = 'none';
       }
     }, 3500);
+  }
+
+  function isChannelSelectOpen() {
+    return Boolean(channelSelect && channelSelect.classList.contains('open'));
+  }
+
+  function syncChannelSelect() {
+    if (!channelSelector || !channelSelectMenu || !channelSelectLabel) return;
+
+    const selectedValue = String(channelSelector.value);
+    const selectedOption = channelSelector.options[channelSelector.selectedIndex];
+    channelSelectLabel.textContent = selectedOption ? selectedOption.textContent : 'Seleccionar canal';
+
+    channelSelectMenu.querySelectorAll('[role="option"]').forEach(option => {
+      const selected = option.dataset.value === selectedValue;
+      option.classList.toggle('selected', selected);
+      option.setAttribute('aria-selected', String(selected));
+      option.tabIndex = selected ? 0 : -1;
+    });
+  }
+
+  function renderChannelSelect() {
+    if (!channelSelector || !channelSelectMenu) return;
+    channelSelectMenu.replaceChildren();
+
+    Array.from(channelSelector.options).forEach(nativeOption => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'channel-select-option';
+      option.setAttribute('role', 'option');
+      option.dataset.value = nativeOption.value;
+      option.textContent = nativeOption.textContent;
+      option.addEventListener('click', () => {
+        channelSelector.value = nativeOption.value;
+        channelSelector.dispatchEvent(new Event('change', { bubbles: true }));
+        closeChannelSelect();
+        channelSelectButton.focus();
+      });
+      channelSelectMenu.appendChild(option);
+    });
+
+    syncChannelSelect();
+  }
+
+  function openChannelSelect() {
+    if (!channelSelect || !channelSelectButton || !channelSelectMenu || channelSelect.classList.contains('hidden')) return;
+    clearTimeout(osdTimer);
+    osdOverlay.classList.remove('hidden');
+    document.body.style.cursor = 'default';
+    channelSelect.classList.add('open');
+    channelSelectButton.setAttribute('aria-expanded', 'true');
+    channelSelectMenu.classList.remove('hidden');
+    syncChannelSelect();
+    const selected = channelSelectMenu.querySelector('[aria-selected="true"]');
+    (selected || channelSelectMenu.querySelector('[role="option"]'))?.focus();
+  }
+
+  function closeChannelSelect({ restoreTimer = true } = {}) {
+    if (!channelSelect || !channelSelectButton || !channelSelectMenu) return;
+    channelSelect.classList.remove('open');
+    channelSelectButton.setAttribute('aria-expanded', 'false');
+    channelSelectMenu.classList.add('hidden');
+    if (restoreTimer) showOSD();
+  }
+
+  function moveChannelOptionFocus(direction) {
+    if (!channelSelectMenu) return;
+    const options = Array.from(channelSelectMenu.querySelectorAll('[role="option"]'));
+    if (!options.length) return;
+    const currentIndex = options.indexOf(document.activeElement);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + direction + options.length) % options.length;
+    options[nextIndex].focus();
   }
 
   const FEEDBACK_ICONS = {
@@ -308,11 +384,13 @@
       }
 
       const channels = await res.json();
+      if (isChannelSelectOpen()) closeChannelSelect();
       channelSelector.innerHTML = '';
 
       if (!channels.length) {
         currentChannelId = null;
-        channelSelector.style.display = 'none';
+        closeChannelSelect({ restoreTimer: false });
+        channelSelect.classList.add('hidden');
         channelNameDisplay.style.display = 'inline';
         channelNameDisplay.textContent = 'SIN CANALES DISPONIBLES';
         setEmptyStateMode('no-channels');
@@ -334,7 +412,8 @@
       channelSelector.value = String(currentChannelId);
       writePreference('channelId', currentChannelId);
 
-      channelSelector.style.display = 'inline-block';
+      renderChannelSelect();
+      channelSelect.classList.remove('hidden');
       channelNameDisplay.style.display = 'none';
       return channels;
     } catch (err) {
@@ -375,6 +454,7 @@
   if (channelSelector) {
       channelSelector.addEventListener('change', (e) => {
         currentChannelId = Number(e.target.value);
+        syncChannelSelect();
         writePreference('channelId', currentChannelId);
         currentMediaItemId = null;
         video.pause();
@@ -382,6 +462,59 @@
         connectChannelEvents();
         syncWithChannel(true);
       });
+  }
+
+  if (channelSelectButton && channelSelectMenu) {
+    channelSelectButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (isChannelSelectOpen()) {
+        closeChannelSelect();
+      } else {
+        openChannelSelect();
+      }
+    });
+
+    channelSelect.addEventListener('click', event => event.stopPropagation());
+
+    channelSelect.addEventListener('keydown', event => {
+      if (event.key === 'Tab' && isChannelSelectOpen()) {
+        closeChannelSelect();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeChannelSelect();
+        channelSelectButton.focus();
+        return;
+      }
+
+      if (!isChannelSelectOpen() && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        openChannelSelect();
+        return;
+      }
+
+      if (isChannelSelectOpen() && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        moveChannelOptionFocus(event.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+
+      if (isChannelSelectOpen() && (event.key === 'Home' || event.key === 'End')) {
+        event.preventDefault();
+        const options = channelSelectMenu.querySelectorAll('[role="option"]');
+        options[event.key === 'Home' ? 0 : options.length - 1]?.focus();
+      }
+    });
+
+    document.addEventListener('click', () => {
+      if (isChannelSelectOpen()) closeChannelSelect();
+    });
+
+    window.addEventListener('blur', () => {
+      if (isChannelSelectOpen()) closeChannelSelect();
+    });
   }
 
   // Fetch Channel State and Synchronize
@@ -1323,6 +1456,10 @@ window.addEventListener('keydown', (e) => {
 
     case 'i':
       // Toggle OSD
+      if (isChannelSelectOpen()) {
+        closeChannelSelect();
+        break;
+      }
       osdOverlay.classList.toggle('hidden');
       break;
   }
