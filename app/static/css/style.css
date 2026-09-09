@@ -28,6 +28,48 @@ html, body {
   font-family: var(--font-family);
 }
 
+/* Consistent native selects across Chromium (including Brave) and Firefox. */
+select {
+  color-scheme: dark;
+  font: inherit;
+  color: var(--text-main);
+  background-color: #181b25;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 0.65rem 2.25rem 0.65rem 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+select:hover:not(:disabled) {
+  background-color: #202431;
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+select:focus-visible {
+  outline: none;
+  border-color: var(--primary-accent);
+  box-shadow: 0 0 0 3px rgba(255, 71, 87, 0.2);
+}
+
+select:disabled {
+  color: var(--text-muted);
+  background-color: #12141c;
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+select option,
+select optgroup {
+  color: var(--text-main);
+  background-color: #181b25;
+}
+
+select option:disabled {
+  color: var(--text-muted);
+}
+
 /* ==========================================
    1. MAIN TV PLAYER STYLES
    ========================================== */
