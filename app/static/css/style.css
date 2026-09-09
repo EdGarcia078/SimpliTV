@@ -31,9 +31,16 @@ html, body {
 /* Consistent native selects across Chromium (including Brave) and Firefox. */
 select {
   color-scheme: dark;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
   font: inherit;
   color: var(--text-main);
   background-color: #181b25;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23cbd5e1' d='M1.41.59 6 5.17 10.59.59 12 2l-6 6-6-6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  background-size: 0.75rem 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   padding: 0.65rem 2.25rem 0.65rem 0.8rem;
@@ -154,7 +161,7 @@ video#tv-player {
   width: auto;
   height: auto;
 
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(12px);
 
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -170,11 +177,13 @@ video#tv-player {
   cursor: pointer;
   outline: none;
 
-  appearance: auto;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
 }
 
 .channel-selector:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background-color: rgba(255, 255, 255, 0.18);
 }
 
 .channel-selector:focus {
@@ -569,7 +578,7 @@ video#tv-player {
 .form-group input,
 .form-group select {
   width: 100%;
-  background: rgba(0, 0, 0, 0.35);
+  background-color: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 0.75rem 1rem;
@@ -1010,7 +1019,7 @@ video#tv-player {
 }
 
 .select-role {
-  background: rgba(0, 0, 0, 0.4);
+  background-color: rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border-color);
   color: #fff;
   border-radius: 4px;
