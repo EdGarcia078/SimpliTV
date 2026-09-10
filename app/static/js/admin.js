@@ -1043,6 +1043,7 @@
         channelsCache = await res.json();
         renderChannelsTable(channelsCache);
         populateDashboardChannelSelector(channelsCache, currentDashboardChannelId);
+        renderLibrary();
       } catch (err) {
         console.error('Error saving channel order:', err);
         alert(err.message || 'No se pudo guardar el orden de los canales.');
@@ -3469,9 +3470,16 @@
       channel.series.get(seriesName).get(season).push(item);
     });
 
-    return Array.from(channels.values()).sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    const channelOrder = new Map(
+      channelsCache.map((channel, index) => [channel.name, index])
     );
+
+    return Array.from(channels.values()).sort((a, b) => {
+      const orderA = channelOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+      const orderB = channelOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+
+      return orderA - orderB;
+    });
   }
 
   function libraryLeaf(item) {
