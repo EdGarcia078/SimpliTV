@@ -1,8 +1,9 @@
 import asyncio
 import logging
+import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -11,8 +12,15 @@ from app.models.media import MediaItem
 from app.api.media import to_media_item_read
 from app.services.selector import is_item_eligible_for_selection, select_next_episode
 from app.services.media_config import get_series_relative_dir, schedule_allows_item
+from app.services.mp4_inspector import inspect_mp4
+from app.services.cache_warmer import cache_warmer
 
 logger = logging.getLogger(__name__)
+
+NEIGHBOR_CACHE_MAX_SIZE = 8
+NEIGHBOR_CACHE_TTL = 20.0
+NEIGHBOR_BUFFER_END = 15.0
+
 
 # Prevent corrupt one-second metadata or a wildly incorrect system clock from
 # monopolizing a request forever. Normal films/episodes cover days or months of
@@ -63,12 +71,15 @@ class ChannelEngine:
         self._initialized: bool = False
         self._global_lock = asyncio.Lock()
         self._subscribers: Dict[int, set[asyncio.Queue[int]]] = {}
+        self._neighbor_cache: Dict[Tuple[int, Tuple[int, ...]], Tuple[float, List[NowPlayingResponse], float]] = {}
 
     def reset(self) -> None:
         """Reset in-memory state (useful for test isolation)."""
         self._channels.clear()
         self._subscribers.clear()
+        self._neighbor_cache.clear()
         self._initialized = False
+
 
     def _get_playback_state(self, channel_id: int) -> PlaybackState:
         if channel_id not in self._channels:
@@ -733,5 +744,173 @@ class ChannelEngine:
             await self._catch_up_locked(session, pb, now)
             await self._advance_episode_locked(session, pb, now)
 
+    async def get_neighbor_states_batched(
+        self,
+        session: Session,
+        current_channel_id: int,
+        allowed_channel_ids: Optional[list[int]] = None,
+    ) -> List[NowPlayingResponse]:
+        """
+        Fetch neighbor states (up to 2 previous, 2 next relative to active channel)
+        in a single batched query. Results cached in LRU cache (max 8 entries, 20s TTL).
+        """
+        if not self._initialized:
+            await self.initialize(session)
+
+        now = datetime.now(timezone.utc)
+        cache_key = (current_channel_id, tuple(sorted(allowed_channel_ids)) if allowed_channel_ids is not None else ())
+
+        if cache_key in self._neighbor_cache:
+            ts, states, valid_until = self._neighbor_cache[cache_key]
+            now_ts = time.monotonic()
+            if (now_ts - ts) < NEIGHBOR_CACHE_TTL and now_ts < valid_until:
+                return states
+
+        stmt = select(Channel).order_by(Channel.display_order, Channel.id)
+        if allowed_channel_ids is not None:
+            if not allowed_channel_ids:
+                return []
+            stmt = stmt.where(Channel.id.in_(allowed_channel_ids))
+
+        all_channels = session.exec(stmt).all()
+        if not all_channels:
+            return []
+
+        channel_ids = [c.id for c in all_channels]
+        if current_channel_id not in channel_ids:
+            return []
+
+        idx = channel_ids.index(current_channel_id)
+        n = len(channel_ids)
+        if n <= 1:
+            return []
+
+        neighbor_indices = []
+        for offset in (-2, -1, 1, 2):
+            neighbor_idx = (idx + offset) % n
+            if neighbor_idx != idx and neighbor_idx not in neighbor_indices:
+                neighbor_indices.append(neighbor_idx)
+
+        neighbor_channel_ids = [channel_ids[i] for i in neighbor_indices]
+        if not neighbor_channel_ids:
+            return []
+
+        states_stmt = (
+            select(ChannelState, MediaItem, Channel)
+            .where(ChannelState.channel_id.in_(neighbor_channel_ids))
+            .where(MediaItem.id == ChannelState.current_episode_id)
+            .where(Channel.id == ChannelState.channel_id)
+        )
+        batch_results = session.exec(states_stmt).all()
+
+        neighbor_states: List[NowPlayingResponse] = []
+        min_remaining = float("inf")
+
+        for state_obj, media_obj, chan_obj in batch_results:
+            started_at = state_obj.started_at
+            if started_at and started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+
+            elapsed = max(0.0, (now - started_at).total_seconds()) if started_at else 0.0
+            duration = max(1.0, media_obj.duration or state_obj.duration)
+            remaining = max(0.0, duration - elapsed)
+
+            if remaining < min_remaining:
+                min_remaining = remaining
+
+            next_ep = session.get(MediaItem, state_obj.next_episode_id) if state_obj.next_episode_id else None
+            npr = NowPlayingResponse(
+                channel_name=chan_obj.name,
+                episode=to_media_item_read(media_obj),
+                started_at=started_at or now,
+                server_time=now,
+                current_time=round(min(elapsed, duration), 2),
+                duration=round(duration, 2),
+                remaining_time=round(remaining, 2),
+                next_episode=to_media_item_read(next_ep) if next_ep else None,
+            )
+            neighbor_states.append(npr)
+
+        now_ts = time.monotonic()
+        buffer_limit = max(0.0, min_remaining - NEIGHBOR_BUFFER_END)
+        valid_until = now_ts + min(NEIGHBOR_CACHE_TTL, buffer_limit)
+
+        if len(self._neighbor_cache) >= NEIGHBOR_CACHE_MAX_SIZE:
+            first_k = next(iter(self._neighbor_cache))
+            self._neighbor_cache.pop(first_k, None)
+
+        self._neighbor_cache[cache_key] = (now_ts, neighbor_states, valid_until)
+        return neighbor_states
+
+    async def warm_best_neighbor_candidate(
+        self,
+        session: Session,
+        current_channel_id: int,
+        allowed_channel_ids: Optional[list[int]] = None,
+    ) -> Optional[str]:
+        """
+        Evaluate candidate neighbor files and select exactly ONE to warm:
+        1. MP4 with index (moov) at end of file
+        2. Largest file size
+        3. Longest video duration
+        """
+        states = await self.get_neighbor_states_batched(session, current_channel_id, allowed_channel_ids)
+        if not states:
+            return None
+
+        candidates = []
+        for state in states:
+            ep = state.episode
+            media_item = session.get(MediaItem, ep.id)
+            if not media_item:
+                continue
+
+            file_path = Path(media_item.file_path)
+            if not file_path.is_file():
+                file_path = settings.resolved_media_dir / media_item.relative_path
+
+            if not file_path.is_file():
+                continue
+
+            try:
+                st = file_path.stat()
+                file_size = st.st_size
+            except OSError:
+                continue
+
+            info = inspect_mp4(file_path)
+            duration = state.duration or media_item.duration or 0.0
+
+            candidates.append({
+                "file_path": file_path,
+                "file_size": file_size,
+                "duration": duration,
+                "moov_at_end": info.moov_at_end,
+                "current_time": state.current_time,
+            })
+
+
+        if not candidates:
+            return None
+
+        # Precedence order: moov_at_end -> largest file_size -> longest duration
+        selected = max(
+            candidates,
+            key=lambda c: (
+                1 if c["moov_at_end"] else 0,
+                c["file_size"],
+                c["duration"],
+            ),
+        )
+
+        file_path = selected["file_path"]
+        duration = max(1.0, selected["duration"])
+        offset_ratio = min(1.0, max(0.0, selected["current_time"] / duration))
+        estimated_offset_bytes = int(selected["file_size"] * offset_ratio)
+
+        await cache_warmer.warm_file_cache_async(file_path, estimated_offset_bytes)
+        return str(file_path)
+
 
 channel_engine = ChannelEngine()
+

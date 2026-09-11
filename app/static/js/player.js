@@ -71,6 +71,118 @@
   let emptyStatePollTimer = null;
   let osdTimer = null;
   let isFetchingState = false;
+  const stateCache = new ChannelStateCache();
+  let stateRequest = null;
+  let warmRequest = null;
+  let warmTimer = null;
+  let cacheEpoch = 0;
+  const warmAttempts = new Map();
+  let sourceEpoch = 0;
+  let metadataHandler = null;
+  let speculativeSource = false;
+  let switchTiming = null;
+
+  function markSwitch(stage) {
+    if (!switchTiming) return;
+    if (!(stage in switchTiming)) switchTiming[stage] = Math.round(performance.now() - switchTiming.start);
+    if (stage === 'playing') {
+      // Local diagnostics only: no network traffic or growing history.
+      window.simplitvLastChannelSwitch = { ...switchTiming };
+    }
+  }
+  video.addEventListener('canplay', () => markSwitch('canplay'));
+
+  function invalidateStateCache() {
+    cacheEpoch++;
+    stateCache.clear();
+    warmAttempts.clear();
+    clearTimeout(warmTimer);
+    warmRequest?.abort();
+  }
+
+  // Only two JSON requests, sequentially, after playback settles. No periodic
+  // all-channel polling, video preloads, extra SSE connections or disk warming.
+  function warmNeighbors() {
+    clearTimeout(warmTimer);
+    warmTimer = setTimeout(async () => {
+      if (document.hidden || video.paused || video.readyState < 3 || warmRequest) return;
+      const ids = Array.from(channelSelector.options, o => Number(o.value));
+      const selected = Number(currentChannelId);
+      const index = ids.indexOf(selected);
+      if (index < 0 || ids.length < 2) return;
+      const epoch = cacheEpoch;
+      const controller = new AbortController();
+      warmRequest = controller;
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      try {
+        for (const id of new Set([ids[(index + 1) % ids.length], ids[(index + ids.length - 1) % ids.length]])) {
+          if (epoch !== cacheEpoch || selected !== Number(currentChannelId) || document.hidden) break;
+          if (id === selected || stateCache.get(id)) continue;
+          if (performance.now() - (warmAttempts.get(id) ?? -Infinity) < 20000) continue;
+          warmAttempts.delete(id);
+          warmAttempts.set(id, performance.now());
+          while (warmAttempts.size > 8) warmAttempts.delete(warmAttempts.keys().next().value);
+          const response = await fetch(`/api/channels/${id}/now-playing`, {
+            cache: 'no-store', signal: controller.signal,
+          });
+          if (!response.ok) continue;
+          const state = await response.json();
+          if (epoch === cacheEpoch && !controller.signal.aborted) stateCache.put(id, state);
+        }
+      } catch (err) {
+        // Speculative requests must never interfere with foreground playback.
+      } finally {
+        clearTimeout(timeout);
+        if (warmRequest === controller) warmRequest = null;
+      }
+    }, 800);
+  }
+
+  function stopVideoSource() {
+    speculativeSource = false;
+    sourceEpoch++;
+    if (metadataHandler) video.removeEventListener('loadedmetadata', metadataHandler);
+    metadataHandler = null;
+    currentMediaItemId = null;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  function startVideoSource(ep) {
+    const epoch = ++sourceEpoch;
+    if (metadataHandler) video.removeEventListener('loadedmetadata', metadataHandler);
+    const target = getExpectedServerOffset();
+    metadataHandler = async () => {
+      if (epoch !== sourceEpoch) return;
+      video.removeEventListener('loadedmetadata', metadataHandler);
+      metadataHandler = null;
+      markSwitch('loadedmetadata');
+      try {
+        const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.05) : Infinity;
+        const finalTarget = Math.max(0, Math.min(getExpectedServerOffset(), end));
+        if (typeof video.fastSeek === 'function') {
+          video.fastSeek(finalTarget);
+        } else {
+          video.currentTime = finalTarget;
+        }
+        await video.play();
+      } catch (err) {
+        if (epoch !== sourceEpoch || err.name !== 'NotAllowedError') return;
+        setMuted(true, false, false);
+        try {
+          await video.play();
+          if (epoch === sourceEpoch) unmuteBanner.classList.remove('hidden');
+        } catch (_) { /* User gesture may still be required. */ }
+      }
+    };
+    video.addEventListener('loadedmetadata', metadataHandler);
+    video.playbackRate = 1;
+    const fragment = target > 0 ? `#t=${target.toFixed(2)}` : '';
+    video.src = `${ep.stream_url}${fragment}`;
+    video.load();
+  }
+
   let syncRequestedWhileFetching = false;
   let channelEventSource = null;
   let accessEventSource = null;
@@ -244,6 +356,7 @@
     channelSelectButton.setAttribute('aria-expanded', 'true');
     channelSelectMenu.classList.remove('hidden');
     syncChannelSelect();
+    warmNeighbors();
     const selected = channelSelectMenu.querySelector('[aria-selected="true"]');
     (selected || channelSelectMenu.querySelector('[role="option"]'))?.focus();
   }
@@ -423,6 +536,11 @@
   }
 
   async function refreshPlayerChannels(showInterface = true) {
+    stateRequest?.abort();
+    stateRequest = null;
+    isFetchingState = false;
+    syncRequestedWhileFetching = false;
+    invalidateStateCache();
     const previousChannelId = currentChannelId == null ? null : Number(currentChannelId);
     const channels = await loadChannels();
 
@@ -431,10 +549,7 @@
         channelEventSource.close();
         channelEventSource = null;
       }
-      currentMediaItemId = null;
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      stopVideoSource();
       emptyState.classList.remove('hidden');
       osdOverlay.classList.remove('hidden');
       return;
@@ -442,10 +557,7 @@
 
     const channelChanged = previousChannelId !== Number(currentChannelId);
     if (channelChanged) {
-      currentMediaItemId = null;
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      stopVideoSource();
     }
     connectChannelEvents();
     await syncWithChannel(channelChanged, showInterface);
@@ -453,12 +565,28 @@
 
   if (channelSelector) {
       channelSelector.addEventListener('change', (e) => {
+        stateRequest?.abort();
+        stateRequest = null;
+        isFetchingState = false;
+        syncRequestedWhileFetching = false;
+        warmRequest?.abort();
+        clearTimeout(nextMediaItemTimer);
+        clearTimeout(emptyStatePollTimer);
         currentChannelId = Number(e.target.value);
         syncChannelSelect();
         writePreference('channelId', currentChannelId);
-        currentMediaItemId = null;
-        video.pause();
-        video.src = '';
+        stopVideoSource();
+        switchTiming = { start: performance.now(), cacheHit: false };
+        const cached = stateCache.get(currentChannelId);
+        if (cached) {
+          speculativeSource = true;
+          switchTiming.cacheHit = true;
+          currentMediaItemId = cached.episode.id;
+          serverTotalDuration = cached.duration;
+          initialServerOffset = cached.current_time;
+          clientFetchTimestamp = Date.now();
+          startVideoSource(cached.episode);
+        }
         connectChannelEvents();
         syncWithChannel(true);
       });
@@ -526,23 +654,29 @@
     }
     isFetchingState = true;
     const requestedChannelId = Number(currentChannelId);
+    const controller = new AbortController();
+    stateRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const response = await fetch(`/api/channels/${requestedChannelId}/now-playing`, { cache: 'no-store' });
+      const response = await fetch(`/api/channels/${requestedChannelId}/now-playing`, { cache: 'no-store', signal: controller.signal });
 
       // The selected channel may have changed while this request was in flight
       // (especially after a realtime access revocation). Never let a stale
       // response restore playback for a channel the account has just lost.
-      if (requestedChannelId !== Number(currentChannelId)) {
+      if (controller.signal.aborted || stateRequest !== controller || requestedChannelId !== Number(currentChannelId)) {
         return;
       }
 
       if (response.status === 401) {
+        invalidateStateCache();
+        stopVideoSource();
         window.location.href = '/login';
         return;
       }
 
       if (response.status === 403) {
+        stopVideoSource();
         // Preferences may have changed in another tab/session. Rebuild the
         // selector from the server-authoritative visible channel list instead
         // of leaving a stale forbidden channel selected.
@@ -552,10 +686,8 @@
       }
 
       if (response.status === 404) {
-        currentMediaItemId = null;
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
+        invalidateStateCache();
+        stopVideoSource();
         setEmptyStateMode('no-signal');
         emptyState.classList.remove('hidden');
         osdOverlay.classList.remove('hidden');
@@ -579,9 +711,11 @@
 
       clearTimeout(emptyStatePollTimer);
       const state = await response.json();
-      if (requestedChannelId !== Number(currentChannelId)) {
+      if (controller.signal.aborted || stateRequest !== controller || requestedChannelId !== Number(currentChannelId)) {
         return;
       }
+      stateCache.put(requestedChannelId, state);
+      markSwitch('stateReceived');
       emptyState.classList.add('hidden');
 
       const ep = state.episode;
@@ -618,36 +752,30 @@
 
       // Handle video source loading or seeking
       if (episodeChanged) {
-        video.src = ep.stream_url;
-        video.load();
-
-        const onLoaded = async () => {
-          video.removeEventListener('loadedmetadata', onLoaded);
-          const target = getExpectedServerOffset();
-          if (target > 0) {
-            video.currentTime = target;
-          }
-          try {
-            await video.play();
-          } catch (err) {
-            console.warn('Autoplay unmuted blocked. Falling back to muted autoplay.', err);
-            setMuted(true, false, false);
-            await video.play();
-            unmuteBanner.classList.remove('hidden');
-          }
-        };
-        video.addEventListener('loadedmetadata', onLoaded);
+        startVideoSource(ep);
       } else if (forceSeek) {
         const target = getExpectedServerOffset();
-        applyDriftCorrection(target, true);
+        // Do not discard a useful buffer just to correct a sub-second cache
+        // estimate. loadedmetadata uses the updated offset if still loading.
+        applyDriftCorrection(target, !speculativeSource);
       }
+      speculativeSource = false;
 
       if (showInterface) {
         showOSD();
       }
     } catch (err) {
-      console.error('Channel synchronization error:', err);
+      if (stateRequest === controller) {
+        stopVideoSource();
+        invalidateStateCache();
+        clearTimeout(emptyStatePollTimer);
+        emptyStatePollTimer = setTimeout(() => syncWithChannel(true), 3500);
+        if (err.name !== 'AbortError') console.error('Channel synchronization error:', err);
+      }
     } finally {
+      clearTimeout(timeout);
+      if (stateRequest !== controller) return;
+      stateRequest = null;
       isFetchingState = false;
       if (syncRequestedWhileFetching) {
         syncRequestedWhileFetching = false;
@@ -712,6 +840,7 @@
   }
 
   async function handleRealtimeAccessUpdate() {
+    invalidateStateCache();
     // Coalesce bursts (for example an admin changing membership and grants in the
     // same save) so the player never runs overlapping selector/state rebuilds.
     if (accessRefreshInFlight) {
@@ -788,7 +917,11 @@
 
     if (immediateSeek || absDiff > 8.0) {
       // Large drift or explicit seek request -> jump directly
-      video.currentTime = expectedTime;
+      if (typeof video.fastSeek === 'function') {
+        video.fastSeek(expectedTime);
+      } else {
+        video.currentTime = expectedTime;
+      }
       video.playbackRate = 1.0;
     } else if (absDiff >= 2.0 && absDiff <= 8.0) {
       // Moderate drift -> gentle speed correction without audible glitch
@@ -829,6 +962,8 @@
 
   // After buffering or stall, resynchronize to live broadcast position
   video.addEventListener('playing', () => {
+    markSwitch('playing');
+    warmNeighbors();
     const expected = getExpectedServerOffset();
     const diff = Math.abs(expected - video.currentTime);
     if (diff > 3.0) {

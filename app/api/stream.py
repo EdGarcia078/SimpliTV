@@ -86,6 +86,8 @@ def head_episode_stream(
     return Response(status_code=status.HTTP_200_OK, headers=headers)
 
 
+import asyncio
+
 @router.get("/{episode_id}", summary="Stream MediaItem Video")
 async def stream_episode(
     episode_id: int,
@@ -96,14 +98,14 @@ async def stream_episode(
     session: Session = Depends(get_session, scope="function"),
 ):
     """Stream authorized video with Range support and live access revocation."""
-    episode = session.get(MediaItem, episode_id)
+    episode = await asyncio.to_thread(session.get, MediaItem, episode_id)
     if not episode:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"MediaItem {episode_id} not found."
         )
 
-    require_episode_access(session, user, episode)
+    await asyncio.to_thread(require_episode_access, session, user, episode)
     token = _request_session_token(session_cookie, authorization)
     access_check = _live_stream_access_check(
         session.get_bind(),
@@ -113,3 +115,4 @@ async def stream_episode(
         media_id=episode.id,  # type: ignore[arg-type]
     )
     return create_media_stream_response(episode, range, access_check=access_check)
+

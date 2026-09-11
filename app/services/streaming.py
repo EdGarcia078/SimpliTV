@@ -84,6 +84,10 @@ def parse_range_header(range_header: Optional[str], file_size: int) -> Optional[
     return start, end
 
 
+import asyncio
+import time
+from app.core.telemetry import telemetry_tracker
+
 async def file_chunk_generator(
     file_path: Path,
     start: int,
@@ -91,6 +95,8 @@ async def file_chunk_generator(
     chunk_size: int = settings.STREAM_CHUNK_SIZE,
     access_check: Optional[Callable[[], bool]] = None,
     access_check_interval_bytes: int = 8 * 1024 * 1024,
+    start_time: Optional[float] = None,
+    range_header: Optional[str] = None,
 ) -> AsyncGenerator[bytes, None]:
     """Yield a byte range and periodically stop if authorization is revoked.
 
@@ -101,11 +107,15 @@ async def file_chunk_generator(
     bytes_remaining = end - start + 1
     bytes_since_access_check = access_check_interval_bytes
     block_index = 0
+    first_byte = True
+
     async with aiofiles.open(file_path, mode="rb") as f:
         await f.seek(start)
         while bytes_remaining > 0:
             if access_check is not None and bytes_since_access_check >= access_check_interval_bytes:
-                if not access_check():
+                # Offload synchronous SQLite access check out of main event loop
+                allowed = await asyncio.to_thread(access_check)
+                if not allowed:
                     break
                 bytes_since_access_check = 0
 
@@ -117,6 +127,17 @@ async def file_chunk_generator(
             chunk = await f.read(read_size)
             if not chunk:
                 break
+
+            if first_byte and start_time is not None:
+                ttfb_ms = (time.monotonic() - start_time) * 1000.0
+                telemetry_tracker.record_range_request(
+                    path=str(file_path),
+                    range_header=range_header,
+                    ttfb_ms=ttfb_ms,
+                    status_code=206 if range_header else 200,
+                )
+                first_byte = False
+
             bytes_remaining -= len(chunk)
             bytes_since_access_check += len(chunk)
             block_index += 1
@@ -131,6 +152,7 @@ def create_media_stream_response(
     """
     Build a StreamingResponse with HTTP 206 Partial Content or 200 OK.
     """
+    start_time = time.monotonic()
     file_path = validate_file_safety(episode.file_path)
     file_size = file_path.stat().st_size
     mime_type = episode.mime_type or "video/mp4"
@@ -148,7 +170,9 @@ def create_media_stream_response(
             "Cache-Control": "private, no-store",
         }
         return StreamingResponse(
-            file_chunk_generator(file_path, start, end, access_check=access_check),
+            file_chunk_generator(
+                file_path, start, end, access_check=access_check, start_time=start_time, range_header=range_header
+            ),
             status_code=status.HTTP_206_PARTIAL_CONTENT,
             headers=headers,
             media_type=mime_type,
@@ -162,8 +186,11 @@ def create_media_stream_response(
         "Cache-Control": "private, no-store",
     }
     return StreamingResponse(
-        file_chunk_generator(file_path, 0, file_size - 1, access_check=access_check),
+        file_chunk_generator(
+            file_path, 0, file_size - 1, access_check=access_check, start_time=start_time, range_header=None
+        ),
         status_code=status.HTTP_200_OK,
         headers=headers,
         media_type=mime_type,
     )
+

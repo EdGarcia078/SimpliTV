@@ -107,10 +107,13 @@ async def catalog_events(
                 break
             await asyncio.sleep(0.5)
             keep_alive += 0.5
-            if not _live_user_is_valid(bind, token, user_id):
+            valid = await asyncio.to_thread(_live_user_is_valid, bind, token, user_id)
+            if not valid:
                 break
-            with Session(bind) as live_session:
-                revision = get_library_revision(live_session)
+            def _check_rev():
+                with Session(bind) as live_session:
+                    return get_library_revision(live_session)
+            revision = await asyncio.to_thread(_check_rev)
             if revision != last_revision:
                 last_revision = revision
                 yield f"event: catalog-update\ndata: {revision}\n\n"
@@ -140,13 +143,18 @@ async def get_now_playing(
     Returns the live broadcast state for a specific channel.
     All authenticated viewers on this channel receive the exact same episode and synchronized playback position.
     """
-    require_channel_access(session, user, channel_id)
+    await asyncio.to_thread(require_channel_access, session, user, channel_id)
     state = await channel_engine.get_current_state(session, channel_id)
     if not state:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active broadcast found for this channel.",
         )
+
+    # Trigger background warming of best neighbor candidate
+    allowed = get_player_channel_ids(session, user)
+    asyncio.create_task(channel_engine.warm_best_neighbor_candidate(session, channel_id, allowed))
+
     return state
 
 @router.get(
@@ -168,9 +176,9 @@ async def channel_events(
     ``now-playing`` so that there remains a single authoritative representation of
     the episode and playback position.
     """
-    require_channel_access(session, user, channel_id)
+    await asyncio.to_thread(require_channel_access, session, user, channel_id)
 
-    channel = session.get(Channel, channel_id)
+    channel = await asyncio.to_thread(session.get, Channel, channel_id)
     if not channel:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -188,7 +196,8 @@ async def channel_events(
             while True:
                 if await request.is_disconnected():
                     break
-                if not _live_user_is_valid(bind, token, user_id, channel_id):
+                valid = await asyncio.to_thread(_live_user_is_valid, bind, token, user_id, channel_id)
+                if not valid:
                     break
                 try:
                     revision = await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -210,3 +219,4 @@ async def channel_events(
             "X-Accel-Buffering": "no",
         },
     )
+
