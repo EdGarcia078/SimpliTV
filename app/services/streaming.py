@@ -100,6 +100,7 @@ async def file_chunk_generator(
     """
     bytes_remaining = end - start + 1
     bytes_since_access_check = access_check_interval_bytes
+    block_index = 0
     async with aiofiles.open(file_path, mode="rb") as f:
         await f.seek(start)
         while bytes_remaining > 0:
@@ -108,12 +109,17 @@ async def file_chunk_generator(
                     break
                 bytes_since_access_check = 0
 
-            read_size = min(chunk_size, bytes_remaining)
+            # Smaller initial reads for every Range request, without changing
+            # response headers, byte coverage or authorization frequency.
+            initial_limit = (64 * 1024, 256 * 1024)
+            read_size = min(chunk_size, bytes_remaining,
+                            initial_limit[block_index] if block_index < 2 else chunk_size)
             chunk = await f.read(read_size)
             if not chunk:
                 break
             bytes_remaining -= len(chunk)
             bytes_since_access_check += len(chunk)
+            block_index += 1
             yield chunk
 
 
