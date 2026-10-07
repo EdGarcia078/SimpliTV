@@ -274,18 +274,22 @@ class MediaWatcher:
         self._worker_task = active_loop.create_task(self._process_pending_worker())
         logger.info(f"MediaWatcher started watching: {self.media_dir}")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop watcher and release observer threads and worker tasks."""
         self._running = False
 
         if self._worker_task and not self._worker_task.done():
             self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
             self._worker_task = None
 
         if self._observer:
             try:
                 self._observer.stop()
-                self._observer.join(timeout=2.0)
+                await asyncio.to_thread(self._observer.join, 2.0)
             except Exception:
                 pass
             self._observer = None
